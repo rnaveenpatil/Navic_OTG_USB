@@ -1,4 +1,4 @@
-# navic_usb
+# navic_otg
 
 A new Flutter project.
 

@@ -18,6 +18,7 @@ class SatelliteData {
   final int detectionCount;
   final String signalStrength;
   final int timestamp;
+  final bool externalGnss;
 
   SatelliteData({
     required this.svid,
@@ -36,35 +37,37 @@ class SatelliteData {
     required this.detectionCount,
     required this.signalStrength,
     required this.timestamp,
+    this.externalGnss = false,
   });
 
   factory SatelliteData.fromMap(Map<String, dynamic> map) {
     return SatelliteData(
       svid: map['svid'] is int ? map['svid'] : (map['svid'] is num ? map['svid'].toInt() : 0),
       system: map['system'] as String? ?? 'UNKNOWN',
-      constellation: map['constellation'] is int ? 
-        _getConstellationName(map['constellation'] as int) : 
-        (map['constellation'] as String? ?? 'UNKNOWN'),
+      constellation: map['constellation'] is int ?
+      _getConstellationName(map['constellation'] as int) :
+      (map['constellation'] as String? ?? 'UNKNOWN'),
       countryFlag: map['countryFlag'] as String? ?? '🌐',
-      cn0DbHz: map['cn0DbHz'] is double ? map['cn0DbHz'] : 
-               (map['cn0DbHz'] is num ? map['cn0DbHz'].toDouble() : 0.0),
+      cn0DbHz: map['cn0DbHz'] is double ? map['cn0DbHz'] :
+      (map['cn0DbHz'] is num ? map['cn0DbHz'].toDouble() : 0.0),
       usedInFix: map['usedInFix'] as bool? ?? false,
-      elevation: map['elevation'] is double ? map['elevation'] : 
-                (map['elevation'] is num ? map['elevation'].toDouble() : 0.0),
-      azimuth: map['azimuth'] is double ? map['azimuth'] : 
-              (map['azimuth'] is num ? map['azimuth'].toDouble() : 0.0),
+      elevation: map['elevation'] is double ? map['elevation'] :
+      (map['elevation'] is num ? map['elevation'].toDouble() : 0.0),
+      azimuth: map['azimuth'] is double ? map['azimuth'] :
+      (map['azimuth'] is num ? map['azimuth'].toDouble() : 0.0),
       hasEphemeris: map['hasEphemeris'] as bool? ?? false,
       hasAlmanac: map['hasAlmanac'] as bool? ?? false,
       frequencyBand: map['frequencyBand'] as String? ?? 'UNKNOWN',
-      carrierFrequencyHz: map['carrierFrequencyHz'] is double ? map['carrierFrequencyHz'] : 
-                        (map['carrierFrequencyHz'] is num ? map['carrierFrequencyHz'].toDouble() : null),
-      detectionTime: map['detectionTime'] is int ? map['detectionTime'] : 
-                    (map['detectionTime'] is num ? map['detectionTime'].toInt() : 0),
-      detectionCount: map['detectionCount'] is int ? map['detectionCount'] : 
-                     (map['detectionCount'] is num ? map['detectionCount'].toInt() : 1),
+      carrierFrequencyHz: map['carrierFrequencyHz'] is double ? map['carrierFrequencyHz'] :
+      (map['carrierFrequencyHz'] is num ? map['carrierFrequencyHz'].toDouble() : null),
+      detectionTime: map['detectionTime'] is int ? map['detectionTime'] :
+      (map['detectionTime'] is num ? map['detectionTime'].toInt() : 0),
+      detectionCount: map['detectionCount'] is int ? map['detectionCount'] :
+      (map['detectionCount'] is num ? map['detectionCount'].toInt() : 1),
       signalStrength: map['signalStrength'] as String? ?? 'UNKNOWN',
-      timestamp: map['timestamp'] is int ? map['timestamp'] : 
-                (map['timestamp'] is num ? map['timestamp'].toInt() : DateTime.now().millisecondsSinceEpoch),
+      timestamp: map['timestamp'] is int ? map['timestamp'] :
+      (map['timestamp'] is num ? map['timestamp'].toInt() : DateTime.now().millisecondsSinceEpoch),
+      externalGnss: map['externalGnss'] as bool? ?? false,
     );
   }
 
@@ -99,6 +102,7 @@ class SatelliteData {
       'detectionCount': detectionCount,
       'signalStrength': signalStrength,
       'timestamp': timestamp,
+      'externalGnss': externalGnss,
     };
   }
 }
@@ -109,29 +113,49 @@ class EnhancedPosition {
   final double? accuracy;
   final double? altitude;
   final double? speed;
-  final double? heading;
+  final double? bearing;
   final DateTime timestamp;
+
+  // NavIC and GNSS status
+  final bool isNavicSupported;
+  final bool isNavicActive;
   final bool isNavicEnhanced;
   final double confidenceScore;
   final String locationSource;
   final String detectionReason;
+
+  // Satellite counts
   final int navicSatellites;
   final int totalSatellites;
   final int navicUsedInFix;
+
+  // Satellite data
   final List<Map<String, dynamic>> satelliteInfo;
+
+  // L5 Band status
   final bool hasL5Band;
+  final bool hasL5BandActive;
+
+  // Positioning info
   final String positioningMethod;
   final Map<String, dynamic> systemStats;
   final String primarySystem;
+
+  // Chipset info (from Java, but not actual detection)
   final String chipsetType;
   final String chipsetVendor;
   final String chipsetModel;
-  final double chipsetConfidence;
-  final double l5Confidence;
+
   final String? message;
   final List<dynamic> verificationMethods;
   final double acquisitionTimeMs;
   final List<dynamic> satelliteDetails;
+
+  // USB GNSS fields (from Java code)
+  final bool usingExternalGnss;
+  final String externalGnssInfo;
+  final String externalGnssVendor;
+  final bool usbConnectionActive;
 
   EnhancedPosition({
     required this.latitude,
@@ -139,64 +163,101 @@ class EnhancedPosition {
     this.accuracy,
     this.altitude,
     this.speed,
-    this.heading,
+    this.bearing,
     required this.timestamp,
+
+    // NavIC and GNSS status
+    required this.isNavicSupported,
+    required this.isNavicActive,
     required this.isNavicEnhanced,
     required this.confidenceScore,
     required this.locationSource,
     required this.detectionReason,
+
+    // Satellite counts
     required this.navicSatellites,
     required this.totalSatellites,
     required this.navicUsedInFix,
+
+    // Satellite data
     required this.satelliteInfo,
+
+    // L5 Band status
     required this.hasL5Band,
+    required this.hasL5BandActive,
+
+    // Positioning info
     required this.positioningMethod,
     required this.systemStats,
     required this.primarySystem,
+
+    // Chipset info (kept for compatibility but not actual detection)
     required this.chipsetType,
     required this.chipsetVendor,
     required this.chipsetModel,
-    required this.chipsetConfidence,
-    required this.l5Confidence,
+
     this.message,
     required this.verificationMethods,
     required this.acquisitionTimeMs,
     required this.satelliteDetails,
+
+    // USB GNSS fields
+    required this.usingExternalGnss,
+    required this.externalGnssInfo,
+    required this.externalGnssVendor,
+    required this.usbConnectionActive,
   });
 
-  // Factory constructor to create from Position object
-  factory EnhancedPosition.fromPosition({
-    required Position position,
+  // Simplified factory constructor
+  factory EnhancedPosition.create({
+    required double latitude,
+    required double longitude,
+    double? accuracy,
+    double? altitude,
+    double? speed,
+    double? bearing,
+    required DateTime timestamp,
+
+    // NavIC and GNSS status
+    required bool isNavicSupported,
+    required bool isNavicActive,
     required bool isNavicEnhanced,
     required double confidenceScore,
     required String locationSource,
     required String detectionReason,
+
+    // Satellite counts
     required int navicSatellites,
     required int totalSatellites,
     required int navicUsedInFix,
-    required List<Map<String, dynamic>> satelliteInfo,
+
+    // L5 Band status
     required bool hasL5Band,
+    required bool hasL5BandActive,
+
+    // Positioning info
     required String positioningMethod,
     required Map<String, dynamic> systemStats,
     required String primarySystem,
-    required String chipsetType,
-    required String chipsetVendor,
-    required String chipsetModel,
-    required double chipsetConfidence,
-    required double l5Confidence,
+
+    // USB GNSS info
+    required bool usingExternalGnss,
+    required String externalGnssInfo,
+    required String externalGnssVendor,
+    required bool usbConnectionActive,
+
     String? message,
-    required List<dynamic> verificationMethods,
-    required double acquisitionTimeMs,
-    required List<dynamic> satelliteDetails,
   }) {
     return EnhancedPosition(
-      latitude: position.latitude,
-      longitude: position.longitude,
-      accuracy: position.accuracy,
-      altitude: position.altitude,
-      speed: position.speed,
-      heading: position.heading,
-      timestamp: position.timestamp,
+      latitude: latitude,
+      longitude: longitude,
+      accuracy: accuracy,
+      altitude: altitude,
+      speed: speed,
+      bearing: bearing,
+      timestamp: timestamp,
+      isNavicSupported: isNavicSupported,
+      isNavicActive: isNavicActive,
       isNavicEnhanced: isNavicEnhanced,
       confidenceScore: confidenceScore,
       locationSource: locationSource,
@@ -204,20 +265,23 @@ class EnhancedPosition {
       navicSatellites: navicSatellites,
       totalSatellites: totalSatellites,
       navicUsedInFix: navicUsedInFix,
-      satelliteInfo: satelliteInfo,
+      satelliteInfo: [],
       hasL5Band: hasL5Band,
+      hasL5BandActive: hasL5BandActive,
       positioningMethod: positioningMethod,
       systemStats: systemStats,
       primarySystem: primarySystem,
-      chipsetType: chipsetType,
-      chipsetVendor: chipsetVendor,
-      chipsetModel: chipsetModel,
-      chipsetConfidence: chipsetConfidence,
-      l5Confidence: l5Confidence,
+      chipsetType: usingExternalGnss ? "EXTERNAL_DEVICE" : "INTERNAL_GNSS",
+      chipsetVendor: usingExternalGnss ? externalGnssVendor : "UNKNOWN",
+      chipsetModel: usingExternalGnss ? externalGnssInfo : "UNKNOWN",
       message: message,
-      verificationMethods: verificationMethods,
-      acquisitionTimeMs: acquisitionTimeMs,
-      satelliteDetails: satelliteDetails,
+      verificationMethods: [],
+      acquisitionTimeMs: 0.0,
+      satelliteDetails: [],
+      usingExternalGnss: usingExternalGnss,
+      externalGnssInfo: externalGnssInfo,
+      externalGnssVendor: externalGnssVendor,
+      usbConnectionActive: usbConnectionActive,
     );
   }
 
@@ -227,8 +291,10 @@ class EnhancedPosition {
     'accuracy': accuracy,
     'altitude': altitude,
     'speed': speed,
-    'heading': heading,
+    'bearing': bearing,
     'timestamp': timestamp.toIso8601String(),
+    'isNavicSupported': isNavicSupported,
+    'isNavicActive': isNavicActive,
     'isNavicEnhanced': isNavicEnhanced,
     'confidenceScore': confidenceScore,
     'locationSource': locationSource,
@@ -236,30 +302,29 @@ class EnhancedPosition {
     'navicSatellites': navicSatellites,
     'totalSatellites': totalSatellites,
     'navicUsedInFix': navicUsedInFix,
-    'satelliteInfo': satelliteInfo,
     'hasL5Band': hasL5Band,
+    'hasL5BandActive': hasL5BandActive,
     'positioningMethod': positioningMethod,
     'systemStats': systemStats,
     'primarySystem': primarySystem,
     'chipsetType': chipsetType,
     'chipsetVendor': chipsetVendor,
     'chipsetModel': chipsetModel,
-    'chipsetConfidence': chipsetConfidence,
-    'l5Confidence': l5Confidence,
     'message': message,
-    'verificationMethods': verificationMethods,
-    'acquisitionTimeMs': acquisitionTimeMs,
-    'satelliteDetails': satelliteDetails,
+    'usingExternalGnss': usingExternalGnss,
+    'externalGnssInfo': externalGnssInfo,
+    'externalGnssVendor': externalGnssVendor,
+    'usbConnectionActive': usbConnectionActive,
   };
 
   @override
   String toString() {
     return 'EnhancedPosition(lat: ${latitude.toStringAsFixed(6)}, lng: ${longitude.toStringAsFixed(6)}, '
-        'acc: ${accuracy?.toStringAsFixed(2)}m, navic: $isNavicEnhanced, '
-        'conf: ${(confidenceScore * 100).toStringAsFixed(1)}%, '
-        'primary: $primarySystem, '
-        'chipset: $chipsetVendor $chipsetModel, '
-        'L5: ${hasL5Band ? "Yes" : "No"}, '
-        'Method: $positioningMethod)';
+        'acc: ${accuracy?.toStringAsFixed(2)}m, '
+        'NavIC: ${isNavicEnhanced ? "Yes" : "No"} (Supported: $isNavicSupported, Active: $isNavicActive), '
+        'Satellites: $totalSatellites total, $navicSatellites NavIC, '
+        'L5: ${hasL5Band ? "Yes" : "No"} (${hasL5BandActive ? "Active" : "Inactive"}), '
+        'Method: $positioningMethod, '
+        'External GNSS: ${usingExternalGnss ? "Yes - $externalGnssInfo" : "No"})';
   }
 }

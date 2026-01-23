@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.example" "\0"
-            VALUE "FileDescription", "navic_usb" "\0"
+            VALUE "FileDescription", "navic_otg" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "navic_usb" "\0"
+            VALUE "InternalName", "navic_otg" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 com.example. All rights reserved." "\0"
-            VALUE "OriginalFilename", "navic_usb.exe" "\0"
-            VALUE "ProductName", "navic_usb" "\0"
+            VALUE "OriginalFilename", "navic_otg.exe" "\0"
+            VALUE "ProductName", "navic_otg" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

@@ -1,6 +1,6 @@
 // lib/services/hardware_services.dart
 import 'dart:async';
-import 'dart:convert';
+//import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'package:navic_ss/models/gnss_satellite.dart';
 
@@ -51,19 +51,6 @@ List<dynamic> _convertJavaList(dynamic value) {
   return [];
 }
 
-List<String> _convertJavaStringList(dynamic value) {
-  if (value == null) return [];
-  if (value is List) {
-    try {
-      return List<String>.from(value.whereType<String>());
-    } catch (e) {
-      print('⚠️ Error converting Java string list: $e');
-      return [];
-    }
-  }
-  return [];
-}
-
 Map<String, dynamic> _convertJavaMap(dynamic value) {
   if (value == null) return {};
   if (value is Map) {
@@ -72,7 +59,7 @@ Map<String, dynamic> _convertJavaMap(dynamic value) {
       try {
         final key = entry.key.toString();
         final val = entry.value;
-        
+
         if (val is Map) {
           result[key] = _convertJavaMap(val);
         } else if (val is List) {
@@ -99,16 +86,16 @@ Map<String, dynamic> _convertJavaMap(dynamic value) {
 
 List<GnssSatellite> _convertToGnssSatellites(List<dynamic> javaList) {
   final List<GnssSatellite> converted = [];
-  
+
   for (final item in javaList) {
     if (item is Map) {
       try {
         final Map<String, dynamic> satMap = {};
-        
+
         for (final entry in item.entries) {
           final key = entry.key.toString();
           final value = entry.value;
-          
+
           // Convert Java types to Dart types
           if (value == null) {
             satMap[key] = null;
@@ -126,32 +113,32 @@ List<GnssSatellite> _convertToGnssSatellites(List<dynamic> javaList) {
             satMap[key] = value.toString();
           }
         }
-        
+
         // Create GnssSatellite from map
         final satellite = GnssSatellite.fromMap(satMap);
         converted.add(satellite);
-        
+
       } catch (e) {
         print('⚠️ Error converting satellite: $e');
       }
     }
   }
-  
+
   return converted;
 }
 
 List<Map<String, dynamic>> _convertJavaSatelliteList(List<dynamic> javaList) {
   final List<Map<String, dynamic>> converted = [];
-  
+
   for (final item in javaList) {
     if (item is Map) {
       try {
         final Map<String, dynamic> sat = {};
-        
+
         for (final entry in item.entries) {
           final key = entry.key.toString();
           final value = entry.value;
-          
+
           // Convert Java types to Dart types
           if (value == null) {
             sat[key] = null;
@@ -169,169 +156,15 @@ List<Map<String, dynamic>> _convertJavaSatelliteList(List<dynamic> javaList) {
             sat[key] = value.toString();
           }
         }
-        
+
         converted.add(sat);
       } catch (e) {
         print('⚠️ Error converting satellite map: $e');
       }
     }
   }
-  
+
   return converted;
-}
-
-// ============ BAND DETECTION DATA CLASSES ============
-
-class GnssFrequencyInfo {
-  final String bandName;
-  final double frequencyHz;
-  final double toleranceHz;
-  final bool isAvailable;
-  final bool isActive;
-  final int satelliteCount;
-  final double averageSignal;
-  final List<String> supportedSystems;
-
-  const GnssFrequencyInfo({
-    required this.bandName,
-    required this.frequencyHz,
-    required this.toleranceHz,
-    required this.isAvailable,
-    required this.isActive,
-    required this.satelliteCount,
-    required this.averageSignal,
-    required this.supportedSystems,
-  });
-
-  factory GnssFrequencyInfo.fromMap(Map<String, dynamic> map) {
-    return GnssFrequencyInfo(
-      bandName: _parseString(map['bandName']),
-      frequencyHz: _parseDouble(map['frequencyHz']),
-      toleranceHz: _parseDouble(map['toleranceHz']),
-      isAvailable: _parseBool(map['isAvailable']),
-      isActive: _parseBool(map['isActive']),
-      satelliteCount: _parseInt(map['satelliteCount']),
-      averageSignal: _parseDouble(map['averageSignal']),
-      supportedSystems: _convertJavaStringList(map['supportedSystems']),
-    );
-  }
-
-  Map<String, dynamic> toMap() {
-    return {
-      'bandName': bandName,
-      'frequencyHz': frequencyHz,
-      'toleranceHz': toleranceHz,
-      'isAvailable': isAvailable,
-      'isActive': isActive,
-      'satelliteCount': satelliteCount,
-      'averageSignal': averageSignal,
-      'supportedSystems': supportedSystems,
-    };
-  }
-}
-
-class BandDetectionResult {
-  final Map<String, GnssFrequencyInfo> availableBands;
-  final Map<String, List<String>> systemBands;
-  final List<String> activeBands;
-  final List<String> supportedBands;
-  final Map<String, int> bandSatelliteCounts;
-  final Map<String, double> bandAverageSignals;
-  final bool hasL5Band;
-  final bool hasL5BandActive;
-  final bool hasL1Band;
-  final bool hasL2Band;
-  final bool hasSBand;
-  final double l5Confidence;
-  final List<String> detectionMethods;
-  final List<String> verificationDetails;
-
-  const BandDetectionResult({
-    required this.availableBands,
-    required this.systemBands,
-    required this.activeBands,
-    required this.supportedBands,
-    required this.bandSatelliteCounts,
-    required this.bandAverageSignals,
-    required this.hasL5Band,
-    required this.hasL5BandActive,
-    required this.hasL1Band,
-    required this.hasL2Band,
-    required this.hasSBand,
-    required this.l5Confidence,
-    required this.detectionMethods,
-    required this.verificationDetails,
-  });
-
-  factory BandDetectionResult.fromMap(Map<String, dynamic> map) {
-    // Parse available bands
-    final Map<String, GnssFrequencyInfo> availableBands = {};
-    if (map['availableBands'] is Map) {
-      final bandsMap = _convertJavaMap(map['availableBands']);
-      for (final entry in bandsMap.entries) {
-        if (entry.value is Map) {
-          availableBands[entry.key] = GnssFrequencyInfo.fromMap(
-            Map<String, dynamic>.from(entry.value),
-          );
-        }
-      }
-    }
-
-    // Parse system bands
-    final Map<String, List<String>> systemBands = {};
-    if (map['systemBands'] is Map) {
-      final systemMap = _convertJavaMap(map['systemBands']);
-      for (final entry in systemMap.entries) {
-        if (entry.value is List) {
-          systemBands[entry.key] = _convertJavaStringList(entry.value);
-        }
-      }
-    }
-
-    return BandDetectionResult(
-      availableBands: availableBands,
-      systemBands: systemBands,
-      activeBands: _convertJavaStringList(map['activeBands']),
-      supportedBands: _convertJavaStringList(map['supportedBands']),
-      bandSatelliteCounts: Map<String, int>.from(
-        _convertJavaMap(map['bandSatelliteCounts']).map(
-          (key, value) => MapEntry(key, _parseInt(value)),
-        ),
-      ),
-      bandAverageSignals: Map<String, double>.from(
-        _convertJavaMap(map['bandAverageSignals']).map(
-          (key, value) => MapEntry(key, _parseDouble(value)),
-        ),
-      ),
-      hasL5Band: _parseBool(map['hasL5Band']),
-      hasL5BandActive: _parseBool(map['hasL5BandActive']),
-      hasL1Band: _parseBool(map['hasL1Band']),
-      hasL2Band: _parseBool(map['hasL2Band']),
-      hasSBand: _parseBool(map['hasSBand']),
-      l5Confidence: _parseDouble(map['l5Confidence']),
-      detectionMethods: _convertJavaStringList(map['detectionMethods']),
-      verificationDetails: _convertJavaStringList(map['verificationDetails']),
-    );
-  }
-
-  Map<String, dynamic> toMap() {
-    return {
-      'availableBands': availableBands.map((key, value) => MapEntry(key, value.toMap())),
-      'systemBands': systemBands,
-      'activeBands': activeBands,
-      'supportedBands': supportedBands,
-      'bandSatelliteCounts': bandSatelliteCounts,
-      'bandAverageSignals': bandAverageSignals,
-      'hasL5Band': hasL5Band,
-      'hasL5BandActive': hasL5BandActive,
-      'hasL1Band': hasL1Band,
-      'hasL2Band': hasL2Band,
-      'hasSBand': hasSBand,
-      'l5Confidence': l5Confidence,
-      'detectionMethods': detectionMethods,
-      'verificationDetails': verificationDetails,
-    };
-  }
 }
 
 // ============ DATA CLASSES ============
@@ -343,32 +176,17 @@ class NavicDetectionResult {
   final int totalSatellites;
   final int usedInFixCount;
   final String detectionMethod;
-  final double confidenceLevel;
-  final double averageSignalStrength;
+  final bool hasL5Band;
+  final bool hasL5BandActive;
   final String chipsetType;
   final String chipsetVendor;
   final String chipsetModel;
-  final bool hasL5Band;
-  final bool hasL5BandActive;
-  final bool hasL1Band;
-  final bool hasL2Band;
-  final bool hasSBand;
-  final String positioningMethod;
-  final String primarySystem;
-  final Map<String, dynamic> l5BandInfo;
-  final Map<String, dynamic> bandInfo;
-  final BandDetectionResult bandDetectionResult;
+  final bool usingExternalGnss;
+  final String externalDeviceInfo;
   final List<dynamic> allSatellites;
   final String? message;
-  final List<String> verificationMethods;
-  final double acquisitionTimeMs;
-  final List<dynamic> satelliteDetails;
-  final double l5Confidence;
-  final double chipsetConfidence;
 
-  // NEW: Added GnssSatellite lists
   List<GnssSatellite> get gnssSatellites => _convertToGnssSatellites(allSatellites);
-  List<GnssSatellite> get gnssSatelliteDetails => _convertToGnssSatellites(satelliteDetails);
 
   const NavicDetectionResult({
     required this.isSupported,
@@ -377,84 +195,35 @@ class NavicDetectionResult {
     required this.totalSatellites,
     required this.usedInFixCount,
     required this.detectionMethod,
-    required this.confidenceLevel,
-    required this.averageSignalStrength,
+    required this.hasL5Band,
+    required this.hasL5BandActive,
     required this.chipsetType,
     required this.chipsetVendor,
     required this.chipsetModel,
-    required this.hasL5Band,
-    required this.hasL5BandActive,
-    required this.hasL1Band,
-    required this.hasL2Band,
-    required this.hasSBand,
-    required this.positioningMethod,
-    required this.primarySystem,
-    required this.l5BandInfo,
-    required this.bandInfo,
-    required this.bandDetectionResult,
+    required this.usingExternalGnss,
+    required this.externalDeviceInfo,
     required this.allSatellites,
     this.message,
-    this.verificationMethods = const [],
-    this.acquisitionTimeMs = 0.0,
-    this.satelliteDetails = const [],
-    this.l5Confidence = 0.0,
-    this.chipsetConfidence = 0.0,
   });
 
   factory NavicDetectionResult.fromMap(Map<String, dynamic> map) {
     try {
-      // Extract band detection result
-      final bandDetectionResult = map.containsKey('bandDetectionResult')
-          ? BandDetectionResult.fromMap(
-              Map<String, dynamic>.from(map['bandDetectionResult']),
-            )
-          : BandDetectionResult(
-              availableBands: {},
-              systemBands: {},
-              activeBands: [],
-              supportedBands: [],
-              bandSatelliteCounts: {},
-              bandAverageSignals: {},
-              hasL5Band: false,
-              hasL5BandActive: false,
-              hasL1Band: false,
-              hasL2Band: false,
-              hasSBand: false,
-              l5Confidence: 0.0,
-              detectionMethods: [],
-              verificationDetails: [],
-            );
-
-      // Handle Java Object types properly
       return NavicDetectionResult(
         isSupported: _parseBool(map['isSupported']),
         isActive: _parseBool(map['isActive']),
-        satelliteCount: _parseInt(map['satelliteCount']),
-        totalSatellites: _parseInt(map['totalSatellites']),
-        usedInFixCount: _parseInt(map['usedInFixCount']),
+        satelliteCount: _parseInt(map['navicSatellites'] ?? map['satelliteCount'] ?? 0), // FIX: Changed field name
+        totalSatellites: _parseInt(map['totalSatellites'] ?? map['satelliteCount'] ?? 0),
+        usedInFixCount: _parseInt(map['navicUsedInFix'] ?? map['usedInFixCount'] ?? 0), // FIX: Changed field name
         detectionMethod: _parseString(map['detectionMethod']),
-        confidenceLevel: _parseDouble(map['confidenceLevel']),
-        averageSignalStrength: _parseDouble(map['averageSignalStrength']),
-        chipsetType: _parseString(map['chipsetType']),
-        chipsetVendor: _parseString(map['chipsetVendor']),
-        chipsetModel: _parseString(map['chipsetModel']),
         hasL5Band: _parseBool(map['hasL5Band']),
         hasL5BandActive: _parseBool(map['hasL5BandActive'] ?? false),
-        hasL1Band: _parseBool(map['hasL1Band'] ?? bandDetectionResult.hasL1Band),
-        hasL2Band: _parseBool(map['hasL2Band'] ?? bandDetectionResult.hasL2Band),
-        hasSBand: _parseBool(map['hasSBand'] ?? bandDetectionResult.hasSBand),
-        positioningMethod: _parseString(map['positioningMethod']),
-        primarySystem: _parseString(map['primarySystem']),
-        l5BandInfo: _convertJavaMap(map['l5BandInfo']),
-        bandInfo: _convertJavaMap(map['bandInfo'] ?? {}),
-        bandDetectionResult: bandDetectionResult,
-        allSatellites: _convertJavaList(map['allSatellites']),
+        chipsetType: _parseString(map['chipsetType'] ?? 'UNKNOWN'),
+        chipsetVendor: _parseString(map['chipsetVendor'] ?? 'UNKNOWN'),
+        chipsetModel: _parseString(map['chipsetModel'] ?? 'UNKNOWN'),
+        usingExternalGnss: _parseBool(map['usingExternalGnss'] ?? false),
+        externalDeviceInfo: _parseString(map['externalDeviceInfo'] ?? map['externalGnssInfo'] ?? 'NONE'), // FIX: Field name
+        allSatellites: _convertJavaList(map['allSatellites'] ?? []),
         message: map['message'] as String?,
-        verificationMethods: _convertJavaStringList(map['verificationMethods']),
-        acquisitionTimeMs: _parseDouble(map['acquisitionTimeMs']),
-        satelliteDetails: _convertJavaList(map['satelliteDetails']),
-        l5Confidence: _parseDouble(map['l5Confidence'] ?? 0.0),
-        chipsetConfidence: _parseDouble(map['chipsetConfidence'] ?? 0.0),
       );
     } catch (e) {
       print('❌ Error creating NavicDetectionResult: $e');
@@ -465,40 +234,15 @@ class NavicDetectionResult {
         totalSatellites: 0,
         usedInFixCount: 0,
         detectionMethod: 'ERROR',
-        confidenceLevel: 0.0,
-        averageSignalStrength: 0.0,
+        hasL5Band: false,
+        hasL5BandActive: false,
         chipsetType: 'ERROR',
         chipsetVendor: 'ERROR',
         chipsetModel: 'ERROR',
-        hasL5Band: false,
-        hasL5BandActive: false,
-        hasL1Band: false,
-        hasL2Band: false,
-        hasSBand: false,
-        positioningMethod: 'ERROR',
-        primarySystem: 'GPS',
-        l5BandInfo: {},
-        bandInfo: {},
-        bandDetectionResult: BandDetectionResult(
-          availableBands: {},
-          systemBands: {},
-          activeBands: [],
-          supportedBands: [],
-          bandSatelliteCounts: {},
-          bandAverageSignals: {},
-          hasL5Band: false,
-          hasL5BandActive: false,
-          hasL1Band: false,
-          hasL2Band: false,
-          hasSBand: false,
-          l5Confidence: 0.0,
-          detectionMethods: [],
-          verificationDetails: [],
-        ),
+        usingExternalGnss: false,
+        externalDeviceInfo: 'ERROR',
         allSatellites: [],
         message: 'Error: $e',
-        l5Confidence: 0.0,
-        chipsetConfidence: 0.0,
       );
     }
   }
@@ -511,38 +255,28 @@ class NavicDetectionResult {
       'totalSatellites': totalSatellites,
       'usedInFixCount': usedInFixCount,
       'detectionMethod': detectionMethod,
-      'confidenceLevel': confidenceLevel,
-      'averageSignalStrength': averageSignalStrength,
+      'hasL5Band': hasL5Band,
+      'hasL5BandActive': hasL5BandActive,
       'chipsetType': chipsetType,
       'chipsetVendor': chipsetVendor,
       'chipsetModel': chipsetModel,
-      'hasL5Band': hasL5Band,
-      'hasL5BandActive': hasL5BandActive,
-      'hasL1Band': hasL1Band,
-      'hasL2Band': hasL2Band,
-      'hasSBand': hasSBand,
-      'positioningMethod': positioningMethod,
-      'primarySystem': primarySystem,
-      'l5BandInfo': l5BandInfo,
-      'bandInfo': bandInfo,
-      'bandDetectionResult': bandDetectionResult.toMap(),
+      'usingExternalGnss': usingExternalGnss,
+      'externalDeviceInfo': externalDeviceInfo,
       'allSatellites': allSatellites,
       'message': message,
-      'verificationMethods': verificationMethods,
-      'acquisitionTimeMs': acquisitionTimeMs,
-      'satelliteDetails': satelliteDetails,
-      'l5Confidence': l5Confidence,
-      'chipsetConfidence': chipsetConfidence,
     };
   }
 
   @override
   String toString() {
-    return 'NavicDetectionResult(isSupported: $isSupported, isActive: $isActive, '
-        'satelliteCount: $satelliteCount, totalSatellites: $totalSatellites, '
-        'hasL5Band: $hasL5Band, hasL5BandActive: $hasL5BandActive, '
-        'hasL1Band: $hasL1Band, hasL2Band: $hasL2Band, hasSBand: $hasSBand, '
-        'l5Confidence: $l5Confidence, positioningMethod: $positioningMethod)';
+    return 'NavicDetectionResult('
+        'isSupported: $isSupported, '
+        'isActive: $isActive, '
+        'satelliteCount: $satelliteCount, '
+        'hasL5Band: $hasL5Band, '
+        'hasL5BandActive: $hasL5BandActive, '
+        'chipset: $chipsetVendor $chipsetModel, '
+        'external: $usingExternalGnss)';
   }
 }
 
@@ -575,13 +309,14 @@ class PermissionResult {
 
 class NavicHardwareService {
   static const MethodChannel _channel = MethodChannel('navic_support');
-  
+
   // Callback handlers
   static Function(Map<String, dynamic>)? _permissionResultCallback;
   static Function(Map<String, dynamic>)? _satelliteUpdateCallback;
   static Function(Map<String, dynamic>)? _locationUpdateCallback;
   static Function(Map<String, dynamic>)? _satelliteMonitorCallback;
-  
+  static Function(Map<String, dynamic>)? _externalGnssStatusCallback;
+
   static bool _isInitialized = false;
   static bool _isHandlingCall = false;
 
@@ -590,7 +325,7 @@ class NavicHardwareService {
       print('ℹ️ NavicHardwareService already initialized');
       return;
     }
-    
+
     try {
       _channel.setMethodCallHandler(_handleMethodCall);
       _isInitialized = true;
@@ -606,10 +341,10 @@ class NavicHardwareService {
       print('⚠️ Already handling method call: ${call.method}');
       return null;
     }
-    
+
     _isHandlingCall = true;
     print('📱 MethodChannel received: ${call.method}');
-    
+
     try {
       switch (call.method) {
         case 'onPermissionResult':
@@ -640,6 +375,13 @@ class NavicHardwareService {
             _satelliteMonitorCallback?.call(data);
           }
           break;
+        case 'onExternalGnssStatus':
+          if (call.arguments is Map) {
+            final data = call.arguments as Map<String, dynamic>;
+            print('🔌 External GNSS status update received');
+            _externalGnssStatusCallback?.call(data);
+          }
+          break;
         default:
           print('⚠️ Unknown method call: ${call.method}');
       }
@@ -659,15 +401,9 @@ class NavicHardwareService {
       print('🔍 Calling checkNavicHardware on Java side');
       final result = await _channel.invokeMethod('checkNavicHardware');
       print('✅ checkNavicHardware response received');
-      
+
       if (result is Map) {
         final resultMap = Map<String, dynamic>.from(result);
-        
-        // Ensure band detection result is included
-        if (!resultMap.containsKey('bandDetectionResult')) {
-          resultMap['bandDetectionResult'] = await _extractBandDetectionInfo(resultMap);
-        }
-        
         return NavicDetectionResult.fromMap(resultMap);
       } else {
         print('❌ Unexpected response type from checkNavicHardware: ${result.runtimeType}');
@@ -682,173 +418,6 @@ class NavicHardwareService {
     }
   }
 
-  /// Extract band detection information from the result
-  static Future<Map<String, dynamic>> _extractBandDetectionInfo(Map<String, dynamic> resultMap) async {
-    try {
-      // Try to get detailed band information from Java
-      final capabilities = await getGnssCapabilities();
-      final allSatellites = await getAllSatellitesInRange();
-      
-      final Map<String, dynamic> bandInfo = {
-        'hasL5Band': resultMap['hasL5Band'] ?? false,
-        'hasL5BandActive': resultMap['hasL5BandActive'] ?? false,
-        'l5Confidence': resultMap['l5Confidence'] ?? 0.0,
-      };
-      
-      // Extract band information from satellites
-      final Map<String, dynamic> bandData = await _analyzeSatelliteBands(allSatellites);
-      
-      return {
-        'availableBands': bandData['availableBands'] ?? {},
-        'systemBands': bandData['systemBands'] ?? {},
-        'activeBands': bandData['activeBands'] ?? [],
-        'supportedBands': bandData['supportedBands'] ?? [],
-        'bandSatelliteCounts': bandData['bandSatelliteCounts'] ?? {},
-        'bandAverageSignals': bandData['bandAverageSignals'] ?? {},
-        'hasL5Band': bandInfo['hasL5Band'],
-        'hasL5BandActive': bandInfo['hasL5BandActive'],
-        'hasL1Band': capabilities['hasL1'] ?? false,
-        'hasL2Band': capabilities['hasL2'] ?? false,
-        'hasSBand': bandData['hasSBand'] ?? false,
-        'l5Confidence': bandInfo['l5Confidence'],
-        'detectionMethods': resultMap['verificationMethods'] ?? [],
-        'verificationDetails': [],
-      };
-    } catch (e) {
-      print('⚠️ Error extracting band detection info: $e');
-      return {};
-    }
-  }
-
-  /// Analyze satellite bands from the satellite data
-  static Future<Map<String, dynamic>> _analyzeSatelliteBands(Map<String, dynamic> satelliteData) async {
-    final Map<String, dynamic> result = {
-      'availableBands': {},
-      'systemBands': {},
-      'activeBands': [],
-      'supportedBands': [],
-      'bandSatelliteCounts': {},
-      'bandAverageSignals': {},
-      'hasSBand': false,
-    };
-    
-    try {
-      if (satelliteData.containsKey('satellites') && satelliteData['satellites'] is List) {
-        final satellites = satelliteData['satellites'] as List<dynamic>;
-        
-        for (final sat in satellites) {
-          if (sat is Map) {
-            final satMap = Map<String, dynamic>.from(sat);
-            final band = satMap['frequencyBand']?.toString() ?? '';
-            final system = satMap['system']?.toString() ?? '';
-            final cn0 = _parseDouble(satMap['cn0DbHz']);
-            
-            if (band.isNotEmpty && band != 'Unknown') {
-              // Track band availability
-              if (!result['availableBands'].containsKey(band)) {
-                result['availableBands'][band] = {
-                  'bandName': band,
-                  'frequencyHz': _getFrequencyForBand(band),
-                  'toleranceHz': 2.0e6,
-                  'isAvailable': true,
-                  'isActive': cn0 > 0,
-                  'satelliteCount': 0,
-                  'averageSignal': 0.0,
-                  'supportedSystems': [],
-                };
-              }
-              
-              // Update band info
-              final bandInfo = result['availableBands'][band];
-              bandInfo['satelliteCount'] = bandInfo['satelliteCount'] + 1;
-              
-              // Update average signal
-              final currentAvg = bandInfo['averageSignal'];
-              final currentCount = bandInfo['satelliteCount'];
-              bandInfo['averageSignal'] = ((currentAvg * (currentCount - 1)) + cn0) / currentCount;
-              
-              // Add system to supported systems
-              if (!bandInfo['supportedSystems'].contains(system)) {
-                bandInfo['supportedSystems'].add(system);
-              }
-              
-              // Track active bands
-              if (cn0 > 0 && !result['activeBands'].contains(band)) {
-                result['activeBands'].add(band);
-              }
-              
-              // Track system bands
-              if (!result['systemBands'].containsKey(system)) {
-                result['systemBands'][system] = [];
-              }
-              if (!result['systemBands'][system].contains(band)) {
-                result['systemBands'][system].add(band);
-              }
-              
-              // Update band counts
-              result['bandSatelliteCounts'][band] = (result['bandSatelliteCounts'][band] ?? 0) + 1;
-              
-              // Check for S-band
-              if (band == 'S' || band.contains('S-band')) {
-                result['hasSBand'] = true;
-              }
-            }
-          }
-        }
-        
-        // Create supported bands list
-        result['supportedBands'] = List<String>.from(result['availableBands'].keys);
-        
-        // Calculate band average signals
-        for (final band in result['availableBands'].keys) {
-          final bandInfo = result['availableBands'][band];
-          result['bandAverageSignals'][band] = bandInfo['averageSignal'];
-        }
-      }
-    } catch (e) {
-      print('⚠️ Error analyzing satellite bands: $e');
-    }
-    
-    return result;
-  }
-
-  /// Get frequency for band name - FIXED WITH ALL GNSS BANDS
-  static double _getFrequencyForBand(String band) {
-    switch (band.toUpperCase()) {
-      // GPS Bands
-      case 'L1': return 1575.42e6;
-      case 'L2': return 1227.60e6;
-      case 'L5': return 1176.45e6;
-      
-      // NavIC Bands
-      case 'S': return 2492.028e6;
-      
-      // GLONASS Bands
-      case 'G1': return 1602.00e6;
-      case 'G2': return 1246.00e6;
-      case 'G3': return 1202.025e6;
-      
-      // Galileo Bands
-      case 'E1': return 1575.42e6;
-      case 'E5': return 1207.14e6;
-      case 'E5A': return 1176.45e6;
-      
-      // BeiDou Bands
-      case 'B1': return 1561.098e6;
-      case 'B2': return 1207.14e6;
-      case 'B2A': return 1176.45e6;
-      
-      // QZSS Bands
-      case 'L1C': return 1575.42e6;
-      case 'L2C': return 1227.60e6;
-      
-      // SBAS Bands (same as GPS L1)
-      case 'L1CA': return 1575.42e6;
-      
-      default: return 0.0;
-    }
-  }
-
   static NavicDetectionResult _getErrorResult(String errorMessage) {
     return NavicDetectionResult(
       isSupported: false,
@@ -857,96 +426,216 @@ class NavicHardwareService {
       totalSatellites: 0,
       usedInFixCount: 0,
       detectionMethod: 'ERROR',
-      confidenceLevel: 0.0,
-      averageSignalStrength: 0.0,
+      hasL5Band: false,
+      hasL5BandActive: false,
       chipsetType: 'ERROR',
       chipsetVendor: 'ERROR',
       chipsetModel: 'ERROR',
-      hasL5Band: false,
-      hasL5BandActive: false,
-      hasL1Band: false,
-      hasL2Band: false,
-      hasSBand: false,
-      positioningMethod: 'ERROR',
-      primarySystem: 'GPS',
-      l5BandInfo: {},
-      bandInfo: {},
-      bandDetectionResult: BandDetectionResult(
-        availableBands: {},
-        systemBands: {},
-        activeBands: [],
-        supportedBands: [],
-        bandSatelliteCounts: {},
-        bandAverageSignals: {},
-        hasL5Band: false,
-        hasL5BandActive: false,
-        hasL1Band: false,
-        hasL2Band: false,
-        hasSBand: false,
-        l5Confidence: 0.0,
-        detectionMethods: [],
-        verificationDetails: [],
-      ),
+      usingExternalGnss: false,
+      externalDeviceInfo: 'ERROR',
       allSatellites: [],
       message: 'Error: $errorMessage',
-      l5Confidence: 0.0,
-      chipsetConfidence: 0.0,
     );
+  }
+
+  // ============ USB GNSS METHODS ============
+
+  /// Check for connected USB GNSS devices
+  static Future<Map<String, dynamic>> checkUsbGnssDevices() async {
+    try {
+      final result = await _channel.invokeMethod('checkUsbGnssDevices');
+      if (result is Map) {
+        return Map<String, dynamic>.from(result);
+      }
+      return {
+        'success': false,
+        'usbDevices': [],
+        'deviceCount': 0,
+        'usingExternalGnss': false,
+        'externalGnssInfo': 'NONE',
+        'message': 'Invalid response type'
+      };
+    } on PlatformException catch (e) {
+      print('Error checking USB GNSS devices: ${e.message}');
+      return {
+        'success': false,
+        'usbDevices': [],
+        'deviceCount': 0,
+        'message': e.message
+      };
+    } catch (e) {
+      print('Error checking USB GNSS devices: $e');
+      return {
+        'success': false,
+        'usbDevices': [],
+        'deviceCount': 0,
+        'message': e.toString()
+      };
+    }
+  }
+
+  /// Connect to USB GNSS device
+  static Future<Map<String, dynamic>> connectToUsbGnss() async {
+    try {
+      final result = await _channel.invokeMethod('connectToUsbGnss');
+      if (result is Map) {
+        return Map<String, dynamic>.from(result);
+      }
+      return {
+        'success': false,
+        'message': 'Invalid response type'
+      };
+    } on PlatformException catch (e) {
+      print('Error connecting to USB GNSS: ${e.message}');
+      return {
+        'success': false,
+        'message': e.message ?? 'Connection failed'
+      };
+    } catch (e) {
+      print('Error connecting to USB GNSS: $e');
+      return {
+        'success': false,
+        'message': e.toString()
+      };
+    }
+  }
+
+  /// Disconnect from USB GNSS device
+  static Future<Map<String, dynamic>> disconnectUsbGnss() async {
+    try {
+      final result = await _channel.invokeMethod('disconnectUsbGnss');
+      if (result is Map) {
+        return Map<String, dynamic>.from(result);
+      }
+      return {
+        'success': false,
+        'message': 'Invalid response type'
+      };
+    } on PlatformException catch (e) {
+      print('Error disconnecting from USB GNSS: ${e.message}');
+      return {
+        'success': false,
+        'message': e.message ?? 'Disconnect failed'
+      };
+    } catch (e) {
+      print('Error disconnecting from USB GNSS: $e');
+      return {
+        'success': false,
+        'message': e.toString()
+      };
+    }
+  }
+
+  /// Get USB GNSS status
+  static Future<Map<String, dynamic>> getUsbGnssStatus() async {
+    try {
+      final result = await _channel.invokeMethod('getUsbGnssStatus');
+      if (result is Map) {
+        return Map<String, dynamic>.from(result);
+      }
+      return {
+        'usingExternalGnss': false,
+        'deviceInfo': 'NONE',
+        'vendorId': 0,
+        'productId': 0,
+        'vendor': 'UNKNOWN',
+        'hasL5Band': false,
+        'hasL5BandActive': false,
+        'connectionActive': false,
+      };
+    } on PlatformException catch (e) {
+      print('Error getting USB GNSS status: ${e.message}');
+      return {
+        'usingExternalGnss': false,
+        'deviceInfo': 'ERROR',
+        'message': e.message
+      };
+    } catch (e) {
+      print('Error getting USB GNSS status: $e');
+      return {
+        'usingExternalGnss': false,
+        'deviceInfo': 'ERROR',
+        'message': e.toString()
+      };
+    }
+  }
+
+  /// Force external GNSS mode (for testing)
+  static Future<Map<String, dynamic>> forceExternalGnssMode(bool enable) async {
+    try {
+      final result = await _channel.invokeMethod('forceExternalGnssMode', enable);
+      if (result is Map) {
+        return Map<String, dynamic>.from(result);
+      }
+      return {
+        'success': false,
+        'message': 'Invalid response type'
+      };
+    } on PlatformException catch (e) {
+      print('Error forcing external GNSS mode: ${e.message}');
+      return {
+        'success': false,
+        'message': e.message ?? 'Failed to change mode'
+      };
+    } catch (e) {
+      print('Error forcing external GNSS mode: $e');
+      return {
+        'success': false,
+        'message': e.toString()
+      };
+    }
   }
 
   // ============ PERMISSION METHODS ============
 
   /// Check location permissions
-  static Future<PermissionResult> checkLocationPermissions() async {
+  static Future<Map<String, dynamic>> checkLocationPermissions() async {
     try {
       final result = await _channel.invokeMethod('checkLocationPermissions');
       if (result is Map) {
-        final resultMap = Map<String, dynamic>.from(result);
-        return PermissionResult.fromMap(resultMap);
+        return Map<String, dynamic>.from(result);
       }
-      return PermissionResult(
-        granted: false,
-        message: 'Invalid response type',
-      );
+      return {
+        'hasFineLocation': false,
+        'hasCoarseLocation': false,
+        'hasBackgroundLocation': false,
+        'allPermissionsGranted': false
+      };
     } on PlatformException catch (e) {
       print('Error checking permissions: ${e.message}');
-      return PermissionResult(
-        granted: false,
-        message: e.message ?? 'Permission check failed',
-      );
+      return {
+        'hasFineLocation': false,
+        'hasCoarseLocation': false,
+        'hasBackgroundLocation': false,
+        'allPermissionsGranted': false,
+        'message': e.message
+      };
     } catch (e) {
       print('Error checking permissions: $e');
-      return PermissionResult(
-        granted: false,
-        message: 'Unknown error: $e',
-      );
+      return {
+        'hasFineLocation': false,
+        'hasCoarseLocation': false,
+        'hasBackgroundLocation': false,
+        'allPermissionsGranted': false,
+        'message': e.toString()
+      };
     }
   }
 
   /// Request location permissions
-  static Future<PermissionResult> requestLocationPermissions() async {
+  static Future<Map<String, dynamic>> requestLocationPermissions() async {
     try {
       final result = await _channel.invokeMethod('requestLocationPermissions');
       if (result is Map) {
-        final resultMap = Map<String, dynamic>.from(result);
-        return PermissionResult.fromMap(resultMap);
+        return Map<String, dynamic>.from(result);
       }
-      return PermissionResult(
-        granted: false,
-        message: 'Invalid response type',
-      );
+      return {'requested': false, 'message': 'Invalid response type'};
     } on PlatformException catch (e) {
       print('Error requesting permissions: ${e.message}');
-      return PermissionResult(
-        granted: false,
-        message: e.message ?? 'Permission request failed',
-      );
+      return {'requested': false, 'message': e.message ?? 'Request failed'};
     } catch (e) {
       print('Error requesting permissions: $e');
-      return PermissionResult(
-        granted: false,
-        message: 'Unknown error: $e',
-      );
+      return {'requested': false, 'message': 'Unknown error: $e'};
     }
   }
 
@@ -989,38 +678,36 @@ class NavicHardwareService {
   // ============ LOCATION UPDATES ============
 
   /// Start location updates
-  static Future<bool> startLocationUpdates() async {
+  static Future<Map<String, dynamic>> startLocationUpdates() async {
     try {
       final result = await _channel.invokeMethod('startLocationUpdates');
       if (result is Map) {
-        final data = Map<String, dynamic>.from(result);
-        return data['success'] as bool? ?? false;
+        return Map<String, dynamic>.from(result);
       }
-      return false;
+      return {'success': false, 'message': 'Invalid response type'};
     } on PlatformException catch (e) {
       print('Error starting location updates: ${e.message}');
-      return false;
+      return {'success': false, 'message': e.message ?? 'Failed to start updates'};
     } catch (e) {
       print('Error starting location updates: $e');
-      return false;
+      return {'success': false, 'message': 'Failed to start updates: $e'};
     }
   }
 
   /// Stop location updates
-  static Future<bool> stopLocationUpdates() async {
+  static Future<Map<String, dynamic>> stopLocationUpdates() async {
     try {
       final result = await _channel.invokeMethod('stopLocationUpdates');
       if (result is Map) {
-        final data = Map<String, dynamic>.from(result);
-        return data['success'] as bool? ?? false;
+        return Map<String, dynamic>.from(result);
       }
-      return false;
+      return {'success': false, 'message': 'Invalid response type'};
     } on PlatformException catch (e) {
       print('Error stopping location updates: ${e.message}');
-      return false;
+      return {'success': false, 'message': e.message ?? 'Failed to stop updates'};
     } catch (e) {
       print('Error stopping location updates: $e');
-      return false;
+      return {'success': false, 'message': 'Failed to stop updates: $e'};
     }
   }
 
@@ -1068,14 +755,14 @@ class NavicHardwareService {
       final result = await _channel.invokeMethod('getAllSatellites');
       if (result is Map) {
         final data = Map<String, dynamic>.from(result);
-        
+
         // Convert satellites to GnssSatellite objects
         if (data.containsKey('satellites') && data['satellites'] is List) {
           final satellites = data['satellites'] as List<dynamic>;
           final gnssSatellites = _convertToGnssSatellites(satellites);
           data['gnssSatellites'] = gnssSatellites;
         }
-        
+
         return data;
       }
       return {'hasData': false, 'satellites': [], 'message': 'Invalid response type'};
@@ -1094,7 +781,7 @@ class NavicHardwareService {
       final result = await _channel.invokeMethod('getAllSatellitesInRange');
       if (result is Map) {
         final data = Map<String, dynamic>.from(result);
-        
+
         // Convert satellites list to proper format
         if (data.containsKey('satellites') && data['satellites'] is List) {
           final satellites = data['satellites'] as List<dynamic>;
@@ -1102,7 +789,7 @@ class NavicHardwareService {
           data['satellites'] = _convertJavaSatelliteList(satellites);
           data['gnssSatellites'] = _convertToGnssSatellites(satellites);
         }
-        
+
         return data;
       }
       return {'hasData': false, 'satellites': [], 'message': 'Invalid response type'};
@@ -1122,17 +809,7 @@ class NavicHardwareService {
     try {
       final result = await _channel.invokeMethod('getGnssCapabilities');
       if (result is Map) {
-        final data = Map<String, dynamic>.from(result);
-        
-        // Extract band capabilities
-        if (data.containsKey('gnssCapabilities') && data['gnssCapabilities'] is Map) {
-          final caps = Map<String, dynamic>.from(data['gnssCapabilities']);
-          data['hasL1'] = caps['hasL1'] ?? false;
-          data['hasL2'] = caps['hasL2'] ?? false;
-          data['hasL5'] = caps['hasL5'] ?? false;
-        }
-        
-        return data;
+        return Map<String, dynamic>.from(result);
       }
       return {};
     } on PlatformException catch (e) {
@@ -1200,229 +877,6 @@ class NavicHardwareService {
     }
   }
 
-  // ============ ENHANCED SATELLITE METHODS ============
-
-  /// Get GNSS range statistics
-  static Future<Map<String, dynamic>> getGnssRangeStatistics() async {
-    try {
-      final result = await _channel.invokeMethod('getGnssRangeStatistics');
-      if (result is Map) {
-        return Map<String, dynamic>.from(result);
-      }
-      return {'hasData': false, 'message': 'Invalid response type'};
-    } on PlatformException catch (e) {
-      print('Error getting GNSS range statistics: ${e.message}');
-      return {'hasData': false, 'message': e.message};
-    } catch (e) {
-      print('Error getting GNSS range statistics: $e');
-      return {'hasData': false, 'message': e.toString()};
-    }
-  }
-
-  /// Get detailed satellite info
-  static Future<Map<String, dynamic>> getDetailedSatelliteInfo() async {
-    try {
-      final result = await _channel.invokeMethod('getDetailedSatelliteInfo');
-      if (result is Map) {
-        return Map<String, dynamic>.from(result);
-      }
-      return {'hasData': false, 'message': 'Invalid response type'};
-    } on PlatformException catch (e) {
-      print('Error getting detailed satellite info: ${e.message}');
-      return {'hasData': false, 'message': e.message};
-    } catch (e) {
-      print('Error getting detailed satellite info: $e');
-      return {'hasData': false, 'message': e.toString()};
-    }
-  }
-
-  /// Get complete satellite summary
-  static Future<Map<String, dynamic>> getCompleteSatelliteSummary() async {
-    try {
-      final result = await _channel.invokeMethod('getCompleteSatelliteSummary');
-      if (result is Map) {
-        return Map<String, dynamic>.from(result);
-      }
-      return {'hasData': false, 'message': 'Invalid response type'};
-    } on PlatformException catch (e) {
-      print('Error getting complete satellite summary: ${e.message}');
-      return {'hasData': false, 'message': e.message};
-    } catch (e) {
-      print('Error getting complete satellite summary: $e');
-      return {'hasData': false, 'message': e.toString()};
-    }
-  }
-
-  /// Get satellite names
-  static Future<Map<String, dynamic>> getSatelliteNames() async {
-    try {
-      final result = await _channel.invokeMethod('getSatelliteNames');
-      if (result is Map) {
-        return Map<String, dynamic>.from(result);
-      }
-      return {'hasData': false, 'message': 'Invalid response type'};
-    } on PlatformException catch (e) {
-      print('Error getting satellite names: ${e.message}');
-      return {'hasData': false, 'message': e.message};
-    } catch (e) {
-      print('Error getting satellite names: $e');
-      return {'hasData': false, 'message': e.toString()};
-    }
-  }
-
-  /// Get constellation details
-  static Future<Map<String, dynamic>> getConstellationDetails() async {
-    try {
-      final result = await _channel.invokeMethod('getConstellationDetails');
-      if (result is Map) {
-        return Map<String, dynamic>.from(result);
-      }
-      return {'hasData': false, 'message': 'Invalid response type'};
-    } on PlatformException catch (e) {
-      print('Error getting constellation details: ${e.message}');
-      return {'hasData': false, 'message': e.message};
-    } catch (e) {
-      print('Error getting constellation details: $e');
-      return {'hasData': false, 'message': e.toString()};
-    }
-  }
-
-  /// Get signal strength analysis
-  static Future<Map<String, dynamic>> getSignalStrengthAnalysis() async {
-    try {
-      final result = await _channel.invokeMethod('getSignalStrengthAnalysis');
-      if (result is Map) {
-        return Map<String, dynamic>.from(result);
-      }
-      return {'hasData': false, 'message': 'Invalid response type'};
-    } on PlatformException catch (e) {
-      print('Error getting signal strength analysis: ${e.message}');
-      return {'hasData': false, 'message': e.message};
-    } catch (e) {
-      print('Error getting signal strength analysis: $e');
-      return {'hasData': false, 'message': e.toString()};
-    }
-  }
-
-  /// Get elevation azimuth data
-  static Future<Map<String, dynamic>> getElevationAzimuthData() async {
-    try {
-      final result = await _channel.invokeMethod('getElevationAzimuthData');
-      if (result is Map) {
-        return Map<String, dynamic>.from(result);
-      }
-      return {'hasData': false, 'message': 'Invalid response type'};
-    } on PlatformException catch (e) {
-      print('Error getting elevation azimuth data: ${e.message}');
-      return {'hasData': false, 'message': e.message};
-    } catch (e) {
-      print('Error getting elevation azimuth data: $e');
-      return {'hasData': false, 'message': e.toString()};
-    }
-  }
-
-  /// Get carrier frequency info
-  static Future<Map<String, dynamic>> getCarrierFrequencyInfo() async {
-    try {
-      final result = await _channel.invokeMethod('getCarrierFrequencyInfo');
-      if (result is Map) {
-        return Map<String, dynamic>.from(result);
-      }
-      return {'hasData': false, 'message': 'Invalid response type'};
-    } on PlatformException catch (e) {
-      print('Error getting carrier frequency info: ${e.message}');
-      return {'hasData': false, 'message': e.message};
-    } catch (e) {
-      print('Error getting carrier frequency info: $e');
-      return {'hasData': false, 'message': e.toString()};
-    }
-  }
-
-  /// Get ephemeris almanac status
-  static Future<Map<String, dynamic>> getEphemerisAlmanacStatus() async {
-    try {
-      final result = await _channel.invokeMethod('getEphemerisAlmanacStatus');
-      if (result is Map) {
-        return Map<String, dynamic>.from(result);
-      }
-      return {'hasData': false, 'message': 'Invalid response type'};
-    } on PlatformException catch (e) {
-      print('Error getting ephemeris almanac status: ${e.message}');
-      return {'hasData': false, 'message': e.message};
-    } catch (e) {
-      print('Error getting ephemeris almanac status: $e');
-      return {'hasData': false, 'message': e.toString()};
-    }
-  }
-
-  /// Get satellite detection history
-  static Future<Map<String, dynamic>> getSatelliteDetectionHistory() async {
-    try {
-      final result = await _channel.invokeMethod('getSatelliteDetectionHistory');
-      if (result is Map) {
-        return Map<String, dynamic>.from(result);
-      }
-      return {'hasData': false, 'message': 'Invalid response type'};
-    } on PlatformException catch (e) {
-      print('Error getting satellite detection history: ${e.message}');
-      return {'hasData': false, 'message': e.message};
-    } catch (e) {
-      print('Error getting satellite detection history: $e');
-      return {'hasData': false, 'message': e.toString()};
-    }
-  }
-
-  /// Get GNSS diversity report
-  static Future<Map<String, dynamic>> getGnssDiversityReport() async {
-    try {
-      final result = await _channel.invokeMethod('getGnssDiversityReport');
-      if (result is Map) {
-        return Map<String, dynamic>.from(result);
-      }
-      return {'hasData': false, 'message': 'Invalid response type'};
-    } on PlatformException catch (e) {
-      print('Error getting GNSS diversity report: ${e.message}');
-      return {'hasData': false, 'message': e.message};
-    } catch (e) {
-      print('Error getting GNSS diversity report: $e');
-      return {'hasData': false, 'message': e.toString()};
-    }
-  }
-
-  /// Get real-time satellite stream
-  static Future<Map<String, dynamic>> getRealTimeSatelliteStream() async {
-    try {
-      final result = await _channel.invokeMethod('getRealTimeSatelliteStream');
-      if (result is Map) {
-        return Map<String, dynamic>.from(result);
-      }
-      return {'hasData': false, 'message': 'Invalid response type'};
-    } on PlatformException catch (e) {
-      print('Error getting real-time satellite stream: ${e.message}');
-      return {'hasData': false, 'message': e.message};
-    } catch (e) {
-      print('Error getting real-time satellite stream: $e');
-      return {'hasData': false, 'message': e.toString()};
-    }
-  }
-
-  /// Get satellite signal quality
-  static Future<Map<String, dynamic>> getSatelliteSignalQuality() async {
-    try {
-      final result = await _channel.invokeMethod('getSatelliteSignalQuality');
-      if (result is Map) {
-        return Map<String, dynamic>.from(result);
-      }
-      return {'hasData': false, 'message': 'Invalid response type'};
-    } on PlatformException catch (e) {
-      print('Error getting satellite signal quality: ${e.message}');
-      return {'hasData': false, 'message': e.message};
-    } catch (e) {
-      print('Error getting satellite signal quality: $e');
-      return {'hasData': false, 'message': e.toString()};
-    }
-  }
-
   // ============ CALLBACK SETUP METHODS ============
 
   /// Set permission result callback
@@ -1469,6 +923,17 @@ class NavicHardwareService {
     _satelliteMonitorCallback = null;
   }
 
+  /// Set external GNSS status callback
+  static void setExternalGnssStatusCallback(Function(Map<String, dynamic>) callback) {
+    print('🔌 Setting external GNSS status callback');
+    _externalGnssStatusCallback = callback;
+  }
+
+  static void removeExternalGnssStatusCallback() {
+    print('🔌 Removing external GNSS status callback');
+    _externalGnssStatusCallback = null;
+  }
+
   // ============ UTILITY METHODS ============
 
   /// Test method to verify channel communication
@@ -1489,6 +954,7 @@ class NavicHardwareService {
     removeSatelliteUpdateCallback();
     removeLocationUpdateCallback();
     removeSatelliteMonitorCallback();
+    removeExternalGnssStatusCallback();
     _isInitialized = false;
     print('🧹 NavicHardwareService disposed');
   }

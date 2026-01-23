@@ -1,13 +1,14 @@
+// lib/screens/home_screen.dart
 import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart';
-import 'package:navic_ss/services/location_service.dart';
-import 'package:navic_ss/screens/emergency.dart';
-import 'package:navic_ss/models/satellite_data_model.dart';
-import 'package:navic_ss/models/gnss_satellite.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:latlong2/latlong.dart';
+import 'package:navic_ss/models/satellite_data_model.dart';
+import 'package:navic_ss/services/location_service.dart';
+//import 'package:navic_ss/screens/emergency.dart';
+import 'package:navic_ss/models/gnss_satellite.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -29,10 +30,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _isNavicSupported = false;
   bool _isNavicActive = false;
   bool _hasL5Band = false;
-  bool _hasL1Band = false;
-  bool _hasL2Band = false;
-  bool _hasSBand = false;
-  double _l5Confidence = 0.0;
+  bool _hasL5BandActive = false;
   String _hardwareMessage = "Checking hardware...";
   String _hardwareStatus = "Checking...";
   bool _showLayerSelection = false;
@@ -40,30 +38,22 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _showBandPanel = false;
   bool _locationAcquired = false;
   LatLng? _lastValidMapCenter;
-  String _chipsetType = "Unknown";
-  String _chipsetVendor = "Unknown";
-  String _chipsetModel = "Unknown";
-  double _chipsetConfidence = 0.0;
   double _confidenceLevel = 0.0;
-  double _signalStrength = 0.0;
   int _navicSatelliteCount = 0;
   int _totalSatelliteCount = 0;
   int _navicUsedInFix = 0;
   String _positioningMethod = "GPS";
   String _primarySystem = "GPS";
-  Map<String, dynamic> _l5BandInfo = {};
+  String _detectionMethod = "UNKNOWN";
   List<GnssSatellite> _allSatellites = [];
-  List<GnssSatellite> _visibleSystems = [];
-  List<GnssSatellite> _satelliteDetails = [];
   Map<String, dynamic> _systemStats = {};
-  
-  // Band information from hardware service
-  Map<String, dynamic> _availableBands = {};
-  Map<String, List<String>> _systemBands = {};
-  List<String> _activeBands = [];
-  List<String> _supportedBands = [];
-  Map<String, int> _bandSatelliteCounts = {};
-  Map<String, double> _bandAverageSignals = {};
+
+  // USB Connection state
+  bool _usingExternalGnss = false;
+  String _externalDeviceInfo = "No USB device";
+  String _chipsetVendor = "Unknown";
+  String _chipsetModel = "Unknown";
+  String _usbConnectionStatus = "DISCONNECTED";
 
   // New state for bottom panel visibility
   bool _isBottomPanelVisible = true;
@@ -93,6 +83,12 @@ class _HomeScreenState extends State<HomeScreen> {
     ),
   };
 
+  // Stream subscriptions
+  late StreamSubscription<bool> _detectingSubscription;
+  late StreamSubscription<Map<String, dynamic>> _hardwareStateSubscription;
+  late StreamSubscription<List<GnssSatellite>> _satellitesSubscription;
+  late StreamSubscription<EnhancedPosition?> _positionSubscription;
+
   @override
   void initState() {
     super.initState();
@@ -104,23 +100,23 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _initializeApp() async {
     try {
       print("🚀 Initializing app...");
-      
+
       // Initialize service first
       await _locationService.initializeService();
-      
+
+      // Setup stream listeners
+      _setupStreamListeners();
+
       // Check and request permission only once
       _permissionGranted = await _checkAndRequestPermissionOnce();
-      
+
       if (_permissionGranted) {
-        // Use the new location service workflow:
-        // 1. Gets GPS location first
-        // 2. Checks hardware capabilities
-        // 3. If hardware supports NavIC, tries to get NavIC-enhanced location
-        // 4. Falls back to GPS if NavIC fails
+        // Get initial hardware status
+        final status = _locationService.getHardwareStatus();
+        _updateFromHardwareStatus(status);
+
+        // Use the location service workflow
         await _acquireInitialLocationWithNavICFlow();
-        
-        // Start monitoring in background
-        _startRealTimeMonitoring();
       } else {
         print("⚠️ No location permission granted");
         _showPermissionDeniedDialog();
@@ -134,33 +130,71 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  /// NEW: Uses the proper flow from location_service.dart
+  void _setupStreamListeners() {
+    // Listening for detecting state changes
+    _detectingSubscription = _locationService.isDetectingStream.listen((isDetecting) {
+      if (mounted) {
+        setState(() {
+          _isLoading = isDetecting;
+        });
+      }
+    });
+
+    // Listening for hardware state updates
+    _hardwareStateSubscription = _locationService.hardwareStateStream.listen((state) {
+      if (mounted) {
+        _updateFromHardwareStatus(state);
+      }
+    });
+
+    // Listening for satellite updates
+    _satellitesSubscription = _locationService.satellitesStream.listen((satellites) {
+      if (mounted) {
+        setState(() {
+          _allSatellites = satellites;
+        });
+      }
+    });
+
+    // Listening for position updates
+    _positionSubscription = _locationService.positionStream.listen((position) {
+      if (mounted && position != null) {
+        setState(() {
+          _currentPosition = position;
+          _updateLocationState(position);
+          _centerMapOnPosition(position);
+          _logLocationDetails(position);
+        });
+      }
+    });
+  }
+
   Future<void> _acquireInitialLocationWithNavICFlow() async {
     try {
       print("\n🎯 ========= STARTING NAVIC FLOW FROM HOME SCREEN ==========");
-      
+
       if (!_permissionGranted) {
         print("❌ No location permission, skipping acquisition");
         return;
       }
 
-      // Use the new location service method that implements the proper flow
+      // Use the new location service method
       final position = await _locationService.getLocationWithNavICFlow();
-      
+
       if (position != null && _isValidCoordinate(position.latitude, position.longitude)) {
         print("✅ Location acquired successfully using NavIC flow");
-        
-        // Update state from the position returned by location service
+
+        // Update state from the position
         _isUsingNavic = position.isNavicEnhanced;
-        _isHardwareChecked = _locationService.hasHardwareBeenChecked;
         _acquisitionFlow = _isUsingNavic ? "NAVIC" : "GPS";
-        
+
         _updateLocationState(position);
         _centerMapOnPosition(position);
         _logLocationDetails(position);
-        
-        // Now update hardware info from location service
-        await _updateHardwareInfoFromService();
+
+        // Update hardware info from service
+        final status = _locationService.getHardwareStatus();
+        _updateFromHardwareStatus(status);
       } else {
         print("❌ Location acquisition failed");
         await _tryFallbackLocationAcquisition();
@@ -170,9 +204,9 @@ class _HomeScreenState extends State<HomeScreen> {
       await _tryFallbackLocationAcquisition();
     } catch (e) {
       print("❌ Error in location acquisition: $e");
-      
+
       if (!mounted) return;
-      
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text("Failed to get location: ${e.toString()}"),
@@ -183,12 +217,11 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  /// Refresh location - follows same workflow
   Future<void> _refreshLocation() async {
     if (_isLoading) return;
-    
+
     setState(() => _isLoading = true);
-    
+
     try {
       // Check permission quickly first
       if (!_permissionGranted) {
@@ -199,27 +232,28 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       }
 
-      // Use the new NavIC flow
+      // Use the NavIC flow
       final position = await _locationService.getLocationWithNavICFlow();
-      
+
       if (position != null && _isValidCoordinate(position.latitude, position.longitude)) {
         // Update state from position
         _isUsingNavic = position.isNavicEnhanced;
         _acquisitionFlow = _isUsingNavic ? "NAVIC" : "GPS";
-        
+
         _updateLocationState(position);
         _centerMapOnPosition(position);
         _logLocationDetails(position);
-        
+
         // Update hardware info
-        await _updateHardwareInfoFromService();
-        
+        final status = _locationService.getHardwareStatus();
+        _updateFromHardwareStatus(status);
+
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(_isUsingNavic ? 
-              "Location refreshed using NavIC" : 
-              "Location refreshed using ${position.locationSource}"),
+            content: Text(_isUsingNavic ?
+            "Location refreshed using NavIC" :
+            "Location refreshed using ${position.locationSource}"),
             backgroundColor: _isUsingNavic ? Colors.green : Colors.blue,
             duration: const Duration(seconds: 2),
           ),
@@ -240,62 +274,53 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  /// Update hardware info from location service
-  Future<void> _updateHardwareInfoFromService() async {
-    try {
-      print("🔄 Updating hardware info from location service...");
-      
-      setState(() {
-        _isNavicSupported = _locationService.isNavicSupported;
-        _isNavicActive = _locationService.isNavicActive;
-        _hasL5Band = _locationService.hasL5Band;
-        _hasL1Band = _locationService.hasL1Band;
-        _hasL2Band = _locationService.hasL2Band;
-        _hasSBand = _locationService.hasSBand;
-        _l5Confidence = _locationService.l5Confidence;
-        _chipsetType = _locationService.chipsetType;
-        _chipsetVendor = _locationService.chipsetVendor;
-        _chipsetModel = _locationService.chipsetModel;
-        _chipsetConfidence = _locationService.chipsetConfidence;
-        _confidenceLevel = _locationService.confidenceLevel;
-        _signalStrength = _locationService.averageSignalStrength;
-        _navicSatelliteCount = _locationService.navicSatelliteCount;
-        _totalSatelliteCount = _locationService.totalSatelliteCount;
-        _navicUsedInFix = _locationService.navicUsedInFix;
-        _positioningMethod = _locationService.positioningMethod;
-        _primarySystem = _locationService.primarySystem;
-        _l5BandInfo = _locationService.l5BandInfo;
-        
-        _allSatellites = _locationService.allSatellites;
-        _satelliteDetails = _locationService.satelliteDetails;
-        _visibleSystems = _locationService.visibleSystems;
-        _systemStats = _locationService.systemStats;
-        
-        // Get band information
-        _availableBands = _locationService.availableBands;
-        _systemBands = _locationService.systemBands;
-        _activeBands = _locationService.activeBands;
-        _supportedBands = _locationService.supportedBands;
-        _bandSatelliteCounts = _locationService.bandSatelliteCounts;
-        _bandAverageSignals = _locationService.bandAverageSignals;
+  void _updateFromHardwareStatus(Map<String, dynamic> status) {
+    setState(() {
+      _isNavicSupported = status['isNavicSupported'] ?? false;
+      _isNavicActive = status['isNavicActive'] ?? false;
+      _hasL5Band = status['hasL5Band'] ?? false;
+      _hasL5BandActive = status['hasL5BandActive'] ?? false;
+      _usingExternalGnss = status['usingExternalGnss'] ?? false;
+      _externalDeviceInfo = status['externalDeviceInfo']?.toString() ?? "NONE";
+      _usbConnectionStatus = status['usbConnectionStatus']?.toString() ?? "DISCONNECTED";
+      _navicSatelliteCount = status['navicSatelliteCount'] ?? 0;
+      _totalSatelliteCount = status['totalSatelliteCount'] ?? 0;
+      _navicUsedInFix = status['navicUsedInFix'] ?? 0;
+      _primarySystem = status['primarySystem']?.toString() ?? "GPS";
+      _systemStats = status['systemStats'] ?? {};
 
-        _updateHardwareMessage();
-        _isHardwareChecked = _locationService.hasHardwareBeenChecked;
-      });
+      if (status['statusMessage'] != null) {
+        _hardwareMessage = status['statusMessage'].toString();
+      }
 
-      print("✅ Hardware info updated from service");
-      print("  ✅ Using NavIC: $_isUsingNavic");
-      print("  ✅ Acquisition Flow: $_acquisitionFlow");
-      print("  ✅ NavIC Supported: $_isNavicSupported");
-      print("  ✅ NavIC Active: $_isNavicActive");
-      print("  ✅ L5 Band: $_hasL5Band (${(_l5Confidence * 100).toStringAsFixed(1)}%)");
-      print("  ✅ S Band: $_hasSBand");
-      print("  ✅ Should Use NavIC: ${_locationService.shouldUseNavic}");
-      print("  ✅ Primary System: $_primarySystem");
+      // Update detection method and positioning method
+      _detectionMethod = status['detectionMethod']?.toString() ?? "UNKNOWN";
 
-    } catch (e) {
-      print("❌ Error updating hardware info: $e");
-    }
+      // Determine positioning method based on current state
+      if (_usingExternalGnss) {
+        _positioningMethod = _hasL5BandActive ? "EXTERNAL_GNSS_L5" : "EXTERNAL_GNSS";
+      } else if (_isNavicActive && _navicUsedInFix >= 4) {
+        _positioningMethod = _hasL5BandActive ? "NAVIC_PRIMARY_L5" : "NAVIC_PRIMARY";
+      } else if (_isNavicActive && _navicUsedInFix >= 2) {
+        _positioningMethod = "NAVIC_HYBRID";
+      } else if (_isNavicActive && _navicUsedInFix >= 1) {
+        _positioningMethod = "NAVIC_ASSISTED";
+      } else {
+        _positioningMethod = "GPS_PRIMARY";
+      }
+
+      // Update chipset info
+      if (_usingExternalGnss) {
+        _chipsetVendor = status['externalGnssVendor']?.toString() ?? "Unknown";
+        _chipsetModel = _externalDeviceInfo;
+      } else {
+        _chipsetVendor = "Internal";
+        _chipsetModel = "GNSS Chipset";
+      }
+
+      _isHardwareChecked = true;
+      _updateHardwareMessage();
+    });
   }
 
   Future<bool> _checkAndRequestPermissionOnce() async {
@@ -310,13 +335,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
     try {
       print("📍 Starting permission check...");
-      
+
       // Check if location services are enabled
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
         print("⚠️ Location services disabled");
-        
-        // Show dialog but don't wait for it to complete
+
         WidgetsBinding.instance.addPostFrameCallback((_) {
           _showEnableLocationDialog();
         });
@@ -327,23 +351,21 @@ class _HomeScreenState extends State<HomeScreen> {
       LocationPermission permission = await Geolocator.checkPermission();
       print("📍 Current permission status: $permission");
 
-      // Handle different permission states
       switch (permission) {
         case LocationPermission.whileInUse:
         case LocationPermission.always:
           print("✅ Permission already granted");
           _hasRequestedPermission = true;
           return true;
-          
+
         case LocationPermission.denied:
           print("📍 Permission denied, requesting...");
-          // Request permission using the new Android 13+ in-app dialog
           permission = await Geolocator.requestPermission();
           _hasRequestedPermission = true;
-          
+
           print("📍 Permission request result: $permission");
-          
-          if (permission == LocationPermission.whileInUse || 
+
+          if (permission == LocationPermission.whileInUse ||
               permission == LocationPermission.always) {
             print("✅ Permission granted after request");
             return true;
@@ -351,16 +373,15 @@ class _HomeScreenState extends State<HomeScreen> {
             print("❌ Permission not granted after request: $permission");
             return false;
           }
-          
+
         case LocationPermission.deniedForever:
           print("❌ Permission denied forever");
-          // For Android 13+, show explanation dialog first
           WidgetsBinding.instance.addPostFrameCallback((_) {
             _showPermissionDeniedForeverDialog();
           });
           _hasRequestedPermission = true;
           return false;
-          
+
         case LocationPermission.unableToDetermine:
           print("⚠️ Unable to determine permission");
           return false;
@@ -384,7 +405,7 @@ class _HomeScreenState extends State<HomeScreen> {
           title: const Text('Location Services Disabled'),
           content: const Text(
             'Location services are required for this app to work properly. '
-            'Please enable location services in your device settings.',
+                'Please enable location services in your device settings.',
           ),
           actions: <Widget>[
             TextButton(
@@ -415,8 +436,8 @@ class _HomeScreenState extends State<HomeScreen> {
           title: const Text('Location Permission Required'),
           content: const Text(
             'Location permission is required for this app to work. '
-            'Please enable it in the app settings. '
-            'On Android 13+, you can grant permission directly from this app.',
+                'Please enable it in the app settings. '
+                'On Android 13+, you can grant permission directly from this app.',
           ),
           actions: <Widget>[
             TextButton(
@@ -429,17 +450,14 @@ class _HomeScreenState extends State<HomeScreen> {
               child: const Text('Grant Permission'),
               onPressed: () async {
                 Navigator.of(context).pop();
-                // Try requesting permission again
                 final permission = await Geolocator.requestPermission();
-                if (permission == LocationPermission.whileInUse || 
+                if (permission == LocationPermission.whileInUse ||
                     permission == LocationPermission.always) {
                   setState(() {
                     _permissionGranted = true;
                   });
-                  // Retry location acquisition
                   await _acquireInitialLocationWithNavICFlow();
                 } else {
-                  // Fallback to app settings
                   Geolocator.openAppSettings();
                 }
               },
@@ -460,7 +478,7 @@ class _HomeScreenState extends State<HomeScreen> {
             title: const Text('Permission Required'),
             content: const Text(
               'Location permission is required to use this app. '
-              'Please grant location permission.',
+                  'Please grant location permission.',
             ),
             actions: <Widget>[
               TextButton(
@@ -473,14 +491,12 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: const Text('Grant Permission'),
                 onPressed: () async {
                   Navigator.of(context).pop();
-                  // Request permission directly
                   final permission = await Geolocator.requestPermission();
-                  if (permission == LocationPermission.whileInUse || 
+                  if (permission == LocationPermission.whileInUse ||
                       permission == LocationPermission.always) {
                     setState(() {
                       _permissionGranted = true;
                     });
-                    // Retry location acquisition
                     await _acquireInitialLocationWithNavICFlow();
                   }
                 },
@@ -495,56 +511,58 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _tryFallbackLocationAcquisition() async {
     try {
       print("🔄 Trying fallback location acquisition...");
-      
-      // Quick check if location services are enabled
+
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
         print("❌ Location services are disabled");
         return;
       }
-      
-      // Try with lower accuracy and shorter timeout
+
       print("📍 Trying with lower accuracy...");
       final position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.medium,
         timeLimit: const Duration(seconds: 10),
       ).timeout(const Duration(seconds: 10));
-      
+
       if (_isValidCoordinate(position.latitude, position.longitude)) {
         print("✅ Fallback location acquired");
-        final enhancedPosition = EnhancedPosition(
+
+        // Get satellite summary from service
+        final satelliteSummary = _locationService.getSatelliteSummary();
+
+        // Create enhanced position
+        final enhancedPosition = EnhancedPosition.create(
           latitude: position.latitude,
           longitude: position.longitude,
           accuracy: position.accuracy,
           altitude: position.altitude,
           speed: position.speed,
-          heading: position.heading,
+          bearing: position.heading,
           timestamp: position.timestamp,
+          isNavicSupported: _isNavicSupported,
+          isNavicActive: _isNavicActive,
           isNavicEnhanced: false,
           confidenceScore: 0.7,
           locationSource: "GPS",
           detectionReason: "Fallback GPS positioning",
           navicSatellites: 0,
-          totalSatellites: 0,
+          totalSatellites: satelliteSummary['total'] ?? 0,
           navicUsedInFix: 0,
           hasL5Band: false,
+          hasL5BandActive: false,
           positioningMethod: "GPS_FALLBACK",
-          satelliteInfo: [],
-          systemStats: {},
+          systemStats: _systemStats,
           primarySystem: "GPS",
-          chipsetType: "Unknown",
-          chipsetVendor: "Unknown",
-          chipsetModel: "Unknown",
-          chipsetConfidence: 0.0,
-          l5Confidence: 0.0,
-          verificationMethods: [],
-          acquisitionTimeMs: 0.0,
-          satelliteDetails: [],
+          usingExternalGnss: false,
+          externalGnssInfo: "NONE",
+          externalGnssVendor: "Unknown",
+          usbConnectionActive: false,
+          message: "Fallback GPS positioning",
         );
-        
+
         _updateLocationState(enhancedPosition);
         _centerMapOnPosition(enhancedPosition);
-        
+
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -577,41 +595,181 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  /// FIXED: Properly determine primary system
+  void _updateHardwareMessage() {
+    final bool hasNavicBands = _hasL5Band && _hasL5BandActive;
+
+    if (_usingExternalGnss) {
+      _hardwareMessage = "Using external USB GNSS device. ${_chipsetVendor} $_chipsetModel";
+      _hardwareStatus = "USB GNSS";
+    } else if (!_isNavicSupported && !hasNavicBands) {
+      _hardwareMessage = "Device does not have L5 band active. Using $_primarySystem.";
+      _hardwareStatus = "Limited Hardware";
+    } else if (_isNavicSupported && _isNavicActive && hasNavicBands) {
+      _hardwareMessage = "NavIC positioning active with L5 band!";
+      _hardwareStatus = "NavIC Active";
+    } else if (_hasL5Band && _hasL5BandActive) {
+      _hardwareMessage = "L5 band active. Enhanced positioning available.";
+      _hardwareStatus = "L5 Active";
+    } else if (_hasL5Band) {
+      _hardwareMessage = "L5 band supported. $_primarySystem positioning available.";
+      _hardwareStatus = "$_primarySystem with L5";
+    } else {
+      _hardwareMessage = "Using $_primarySystem positioning.";
+      _hardwareStatus = "$_primarySystem Only";
+    }
+  }
+
+  void _updateLocationState(EnhancedPosition position) {
+    setState(() {
+      _currentPosition = position;
+
+      _primarySystem = position.primarySystem;
+      if (_primarySystem.isEmpty || _primarySystem == "Unknown") {
+        _primarySystem = _determinePrimarySystem();
+      }
+
+      _updateLocationSource();
+      _updateLocationQuality(position);
+      _locationAcquired = true;
+      _lastValidMapCenter = LatLng(position.latitude, position.longitude);
+
+      _navicSatelliteCount = position.navicSatellites;
+      _totalSatelliteCount = position.totalSatellites;
+      _navicUsedInFix = position.navicUsedInFix;
+      _hasL5Band = position.hasL5Band;
+      _hasL5BandActive = position.hasL5BandActive;
+      _positioningMethod = position.positioningMethod;
+
+      if (_primarySystem.isEmpty || _primarySystem == "Unknown") {
+        _primarySystem = _determinePrimarySystem();
+      }
+
+      _isUsingNavic = position.isNavicEnhanced;
+      _acquisitionFlow = _isUsingNavic ? "NAVIC" : _primarySystem;
+
+      _systemStats = position.systemStats;
+
+      // Get current band info from satellites
+      _updateBandInfoFromSatellites();
+    });
+  }
+
+  void _updateBandInfoFromSatellites() {
+    // Extract band information from satellites
+    final activeBands = <String>{};
+    for (final sat in _allSatellites) {
+      if (sat.usedInFix) {
+        // Add band based on constellation and frequency
+        if (sat.carrierFrequencyHz != null) {
+          final freq = sat.carrierFrequencyHz!;
+          if (freq >= 1575.42e6 && freq <= 1575.42e6) {
+            activeBands.add('L1');
+          } else if (freq >= 1176.45e6 && freq <= 1176.45e6) {
+            activeBands.add('L5');
+          }
+        }
+      }
+    }
+  }
+
+  void _centerMapOnPosition(EnhancedPosition position) {
+    _mapController.move(
+      LatLng(position.latitude, position.longitude),
+      18.0,
+    );
+  }
+
+  void _logLocationDetails(EnhancedPosition position) {
+    print("\n📍 === LOCATION DETAILS ===");
+    print("📍 Coordinates: ${position.latitude}, ${position.longitude}");
+    print("🎯 Accuracy: ${position.accuracy?.toStringAsFixed(2)} meters");
+    print("🛰️ Source: ${position.locationSource}");
+    print("🎯 Primary System: $_primarySystem");
+    print("💪 Confidence: ${(position.confidenceScore * 100).toStringAsFixed(1)}%");
+    print("🔌 Using External GNSS: $_usingExternalGnss");
+    print("🏭 Chipset: $_chipsetVendor $_chipsetModel");
+    print("📡 NavIC Satellites: $_navicSatelliteCount ($_navicUsedInFix in fix)");
+    print("📶 L5 Band: ${_hasL5Band ? 'Available' : 'Not Available'}");
+    print("🎯 Positioning Method: $_positioningMethod");
+    print("🛰️ Total Satellites: $_totalSatelliteCount");
+    print("📊 Visible Satellites: ${_allSatellites.length}");
+    print("📱 Using NavIC: $_isUsingNavic");
+    print("📱 Acquisition Flow: $_acquisitionFlow");
+    print("===========================\n");
+  }
+
+  void _updateLocationSource() {
+    if (_isUsingNavic && _isNavicSupported && _isNavicActive) {
+      _locationSource = "NAVIC";
+    } else if (_usingExternalGnss) {
+      _locationSource = "USB GNSS";
+    } else {
+      _locationSource = _primarySystem;
+    }
+
+    print("📍 Location Source Updated: $_locationSource (Using NavIC: $_isUsingNavic, USB: $_usingExternalGnss)");
+  }
+
+  void _updateLocationQuality(EnhancedPosition pos) {
+    final isUsingNavic = _isUsingNavic && _isNavicSupported && _isNavicActive;
+    final isUsingL5 = _hasL5BandActive;
+
+    String bandInfo = isUsingL5 ? "L5 " : "";
+
+    final String systemName = _locationSource;
+
+    if (pos.accuracy != null && pos.accuracy! < 1.0) {
+      _locationQuality = isUsingNavic ?
+      "${bandInfo}NavIC Excellent" :
+      "${bandInfo}$systemName Excellent";
+    } else if (pos.accuracy != null && pos.accuracy! < 2.0) {
+      _locationQuality = isUsingNavic ?
+      "${bandInfo}NavIC High" :
+      "${bandInfo}$systemName High";
+    } else if (pos.accuracy != null && pos.accuracy! < 5.0) {
+      _locationQuality = isUsingNavic ?
+      "${bandInfo}NavIC Good" :
+      "${bandInfo}$systemName Good";
+    } else if (pos.accuracy != null && pos.accuracy! < 10.0) {
+      _locationQuality = isUsingNavic ?
+      "${bandInfo}NavIC Basic" :
+      "${bandInfo}$systemName Basic";
+    } else {
+      _locationQuality = isUsingNavic ?
+      "${bandInfo}NavIC Low" :
+      "${bandInfo}$systemName Low";
+    }
+  }
+
   String _determinePrimarySystem() {
-    // First use what's already determined by location service
     if (_primarySystem.isNotEmpty && _primarySystem != "Unknown") {
       return _primarySystem;
     }
-    
-    // Then check system stats
+
     if (_systemStats.isNotEmpty) {
       try {
-        // Find the system with the most satellites used in fix
         String maxSystem = "GPS";
-        int maxUsed = 0;
-        
+        int maxCount = 0;
+
         for (final entry in _systemStats.entries) {
           final system = entry.key;
           final stats = entry.value;
-          
+
           if (stats is Map<String, dynamic>) {
-            final usedCount = stats['used'] as int? ?? 0;
-            if (usedCount > maxUsed) {
-              maxUsed = usedCount;
+            final total = stats['total'] as int? ?? 0;
+            if (total > maxCount) {
+              maxCount = total;
               maxSystem = system;
             }
           }
         }
-        
-        // Map to proper display names
+
         return _mapSystemToDisplayName(maxSystem);
       } catch (e) {
         print("⚠️ Error determining primary system: $e");
       }
     }
-    
-    // Fallback based on positioning method
+
     if (_positioningMethod.contains("NAVIC")) return "NavIC";
     if (_positioningMethod.contains("GLONASS")) return "GLONASS";
     if (_positioningMethod.contains("GALILEO")) return "Galileo";
@@ -619,11 +777,10 @@ class _HomeScreenState extends State<HomeScreen> {
     if (_positioningMethod.contains("QZSS")) return "QZSS";
     if (_positioningMethod.contains("SBAS")) return "SBAS";
     if (_positioningMethod.contains("MULTI")) return "Multi-GNSS";
-    
+
     return "GPS";
   }
 
-  /// Map system codes to display names
   String _mapSystemToDisplayName(String system) {
     switch (system.toUpperCase()) {
       case 'IRNSS':
@@ -643,253 +800,73 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _updateSatelliteData() async {
+  Future<void> _checkUsbDevices() async {
     try {
-      print("🛰️ Updating satellite data...");
-      await _locationService.updateSatelliteData();
-      
       setState(() {
-        _allSatellites = _locationService.allSatellites;
-        _satelliteDetails = _locationService.satelliteDetails;
-        _visibleSystems = _locationService.visibleSystems;
-        _systemStats = _locationService.systemStats;
-        _navicSatelliteCount = _locationService.navicSatelliteCount;
-        _totalSatelliteCount = _locationService.totalSatelliteCount;
-        _navicUsedInFix = _locationService.navicUsedInFix;
-        _hasL5Band = _locationService.hasL5Band;
-        _hasL1Band = _locationService.hasL1Band;
-        _hasL2Band = _locationService.hasL2Band;
-        _hasSBand = _locationService.hasSBand;
-        _l5Confidence = _locationService.l5Confidence;
-        _positioningMethod = _locationService.positioningMethod;
-        _primarySystem = _locationService.primarySystem; // Get from service
-        
-        // Update band information
-        _activeBands = _locationService.activeBands;
-        _bandSatelliteCounts = _locationService.bandSatelliteCounts;
-        _bandAverageSignals = _locationService.bandAverageSignals;
+        _hardwareMessage = "Scanning for USB devices...";
       });
-      
-      print("✅ Satellite data updated: $_totalSatelliteCount total, $_navicSatelliteCount NavIC ($_navicUsedInFix in fix)");
-      print("🎯 Primary System: $_primarySystem");
-      print("🎯 Positioning Method: $_positioningMethod");
+
+      final result = await _locationService.checkUsbGnssDevices();
+
+      setState(() {
+        if (result['success'] == true) {
+          _usbConnectionStatus = result['status']?.toString() ?? "SCANNED";
+          _hardwareMessage = "Found ${result['availableDevices']?.length ?? 0} USB device(s)";
+        } else {
+          _hardwareMessage = "USB scan failed: ${result['message']}";
+        }
+      });
+
     } catch (e) {
-      print("❌ Error updating satellite data: $e");
+      print("❌ Error checking USB devices: $e");
+      setState(() {
+        _hardwareMessage = "USB scan failed: $e";
+      });
     }
   }
 
-  void _updateHardwareMessage() {
-    final bands = <String>[];
-    if (_hasL1Band) bands.add('L1');
-    if (_hasL2Band) bands.add('L2');
-    if (_hasL5Band) bands.add('L5');
-    if (_hasSBand) bands.add('S');
-    
-    final bandsStr = bands.isNotEmpty ? 'Available bands: ${bands.join(', ')}. ' : '';
-    
-    // Check if both L5 and S bands are present for NavIC support
-    final bool hasNavicBands = _hasL5Band && _hasSBand;
-    
-    if (!_isNavicSupported && !hasNavicBands) {
-      _hardwareMessage = "$bandsStr Device does not have both L5 and S bands required for NavIC. Using $_primarySystem.";
-      _hardwareStatus = "Limited Hardware";
-    } else if (_isNavicSupported && hasNavicBands) {
-      _hardwareMessage = "$bandsStr Device has L5 and S bands. NavIC positioning ready!";
-      _hardwareStatus = "NavIC Ready";
-    } else if (_hasL5Band && _hasSBand) {
-      _hardwareMessage = "$bandsStr Device has L5 and S bands but NavIC not fully supported.";
-      _hardwareStatus = "Partial NavIC";
-    } else if (_hasL5Band) {
-      _hardwareMessage = "$bandsStr Device has L5 band support. $_primarySystem positioning available.";
-      _hardwareStatus = "$_primarySystem with L5";
-    } else {
-      _hardwareMessage = "$bandsStr Using $_primarySystem positioning.";
-      _hardwareStatus = "$_primarySystem Only";
-    }
-
-    _updateLocationSource();
-  }
-
-  void _setHardwareErrorState() {
-    setState(() {
-      _isHardwareChecked = true;
-      _isNavicSupported = false;
-      _isNavicActive = false;
-      _hasL5Band = false;
-      _hasL1Band = false;
-      _hasL2Band = false;
-      _hasSBand = false;
-      _l5Confidence = 0.0;
-      _hardwareMessage = "Hardware detection failed";
-      _hardwareStatus = "Error";
-      _locationSource = "GPS";
-      _chipsetType = "Unknown";
-      _chipsetVendor = "Unknown";
-      _chipsetModel = "Unknown";
-      _chipsetConfidence = 0.0;
-      _confidenceLevel = 0.0;
-      _signalStrength = 0.0;
-      _navicSatelliteCount = 0;
-      _totalSatelliteCount = 0;
-      _navicUsedInFix = 0;
-      _positioningMethod = "GPS";
-      _primarySystem = "GPS";
-      _l5BandInfo = {};
-      _allSatellites = [];
-      _visibleSystems = [];
-      _satelliteDetails = [];
-      _systemStats = {};
-      _availableBands = {};
-      _systemBands = {};
-      _activeBands = [];
-      _supportedBands = [];
-      _bandSatelliteCounts = {};
-      _bandAverageSignals = {};
-      _isUsingNavic = false;
-      _acquisitionFlow = "GPS";
-    });
-  }
-
-  void _updateLocationState(EnhancedPosition position) {
-    setState(() {
-      _currentPosition = position;
-      
-      // Trust the location service for primary system
-      _primarySystem = position.primarySystem;
-      if (_primarySystem.isEmpty || _primarySystem == "Unknown") {
-        _primarySystem = _determinePrimarySystem();
-      }
-      
-      _updateLocationSource();
-      _updateLocationQuality(position);
-      _locationAcquired = true;
-      _lastValidMapCenter = LatLng(position.latitude, position.longitude);
-
-      // Update from location service
-      _navicSatelliteCount = _locationService.navicSatelliteCount;
-      _totalSatelliteCount = _locationService.totalSatelliteCount;
-      _navicUsedInFix = _locationService.navicUsedInFix;
-      _hasL5Band = _locationService.hasL5Band;
-      _hasL1Band = _locationService.hasL1Band;
-      _hasL2Band = _locationService.hasL2Band;
-      _hasSBand = _locationService.hasSBand;
-      _l5Confidence = _locationService.l5Confidence;
-      _positioningMethod = _locationService.positioningMethod;
-      
-      // Ensure primary system is correct
-      if (_primarySystem.isEmpty || _primarySystem == "Unknown") {
-        _primarySystem = _determinePrimarySystem();
-      }
-      
-      _chipsetType = _locationService.chipsetType;
-      _chipsetVendor = _locationService.chipsetVendor;
-      _chipsetModel = _locationService.chipsetModel;
-      _chipsetConfidence = _locationService.chipsetConfidence;
-      _isUsingNavic = position.isNavicEnhanced;
-      _acquisitionFlow = _isUsingNavic ? "NAVIC" : _primarySystem;
-      
-      _allSatellites = _locationService.allSatellites;
-      _satelliteDetails = _locationService.satelliteDetails;
-      _systemStats = _locationService.systemStats;
-      
-      // Update band information
-      _activeBands = _locationService.activeBands;
-      _bandSatelliteCounts = _locationService.bandSatelliteCounts;
-      _bandAverageSignals = _locationService.bandAverageSignals;
-    });
-  }
-
-  void _centerMapOnPosition(EnhancedPosition position) {
-    _mapController.move(
-      LatLng(position.latitude, position.longitude),
-      18.0,
-    );
-  }
-
-  void _logLocationDetails(EnhancedPosition position) {
-    print("\n📍 === LOCATION DETAILS ===");
-    print("📍 Coordinates: ${position.latitude}, ${position.longitude}");
-    print("🎯 Accuracy: ${position.accuracy?.toStringAsFixed(2)} meters");
-    print("🛰️ Source: ${position.locationSource}");
-    print("🎯 Primary System: $_primarySystem");
-    print("💪 Confidence: ${(position.confidenceScore * 100).toStringAsFixed(1)}%");
-    print("🏭 Vendor: $_chipsetVendor");
-    print("📋 Model: $_chipsetModel");
-    print("🎯 Chipset Confidence: ${(_chipsetConfidence * 100).toStringAsFixed(1)}%");
-    print("📊 Hardware Confidence: ${(_confidenceLevel * 100).toStringAsFixed(1)}%");
-    print("📡 NavIC Satellites: $_navicSatelliteCount ($_navicUsedInFix in fix)");
-    print("📶 L1 Band: ${_hasL1Band ? 'Available' : 'Not Available'}");
-    print("📶 L2 Band: ${_hasL2Band ? 'Available' : 'Not Available'}");
-    print("📶 L5 Band: ${_hasL5Band ? 'Available' : 'Not Available'}");
-    print("📶 S Band: ${_hasSBand ? 'Available' : 'Not Available'}");
-    print("🔍 L5 Confidence: ${(_l5Confidence * 100).toStringAsFixed(1)}%");
-    print("🎯 Positioning Method: $_positioningMethod");
-    print("🛰️ Total Satellites: $_totalSatelliteCount");
-    print("📊 Visible Satellites: ${_satelliteDetails.length}");
-    print("📡 Active Bands: ${_activeBands.join(', ')}");
-    print("📱 Using NavIC: $_isUsingNavic");
-    print("📱 Acquisition Flow: $_acquisitionFlow");
-    print("===========================\n");
-  }
-
-  Future<void> _startRealTimeMonitoring() async {
+  Future<void> _connectToUsbGnss() async {
     try {
-      await _locationService.startRealTimeMonitoring();
-      await _updateSatelliteData();
-      print("✅ Real-time monitoring started");
+      setState(() {
+        _hardwareMessage = "Connecting to USB GNSS...";
+      });
+
+      final result = await _locationService.connectToUsbGnss();
+
+      setState(() {
+        if (result['success'] == true) {
+          _hardwareMessage = "Connected to ${result['deviceInfo']}";
+          _usingExternalGnss = true;
+          _externalDeviceInfo = result['deviceInfo']?.toString() ?? "CONNECTED";
+        } else {
+          _hardwareMessage = "Connection failed: ${result['message']}";
+        }
+      });
+
     } catch (e) {
-      print("❌ Real-time monitoring failed: $e");
+      print("❌ Error connecting to USB GNSS: $e");
+      setState(() {
+        _hardwareMessage = "USB connection error: $e";
+      });
     }
   }
 
-  /// Show actual system being used
-  void _updateLocationSource() {
-    if (_isUsingNavic && _isNavicSupported && _isNavicActive) {
-      _locationSource = "NAVIC";
-    } else {
-      // Use the primary system determined from satellite data
-      _locationSource = _primarySystem;
-    }
-    
-    print("📍 Location Source Updated: $_locationSource (Using NavIC: $_isUsingNavic)");
-  }
+  Future<void> _disconnectUsbGnss() async {
+    try {
+      final result = await _locationService.disconnectUsbGnss();
 
-  void _updateLocationQuality(EnhancedPosition pos) {
-    final isUsingNavic = _isUsingNavic && _isNavicSupported && _isNavicActive;
-    final isUsingL5 = _activeBands.contains('L5');
-    final isUsingL1 = _activeBands.contains('L1');
-    final isUsingL2 = _activeBands.contains('L2');
-    final isUsingS = _activeBands.contains('S');
+      setState(() {
+        if (result['success'] == true) {
+          _hardwareMessage = "USB GNSS disconnected";
+          _usingExternalGnss = false;
+          _externalDeviceInfo = "NONE";
+        } else {
+          _hardwareMessage = "Disconnect failed: ${result['message']}";
+        }
+      });
 
-    String bandInfo = "";
-    if (isUsingL5) bandInfo = "L5 ";
-    else if (isUsingL2) bandInfo = "L2 ";
-    else if (isUsingL1) bandInfo = "L1 ";
-    else if (isUsingS) bandInfo = "S ";
-
-    // Use the actual location source
-    final String systemName = _locationSource;
-    
-    if (pos.accuracy != null && pos.accuracy! < 1.0) {
-      _locationQuality = isUsingNavic ? 
-        "${bandInfo}NavIC Excellent" : 
-        "${bandInfo}$systemName Excellent";
-    } else if (pos.accuracy != null && pos.accuracy! < 2.0) {
-      _locationQuality = isUsingNavic ? 
-        "${bandInfo}NavIC High" : 
-        "${bandInfo}$systemName High";
-    } else if (pos.accuracy != null && pos.accuracy! < 5.0) {
-      _locationQuality = isUsingNavic ? 
-        "${bandInfo}NavIC Good" : 
-        "${bandInfo}$systemName Good";
-    } else if (pos.accuracy != null && pos.accuracy! < 10.0) {
-      _locationQuality = isUsingNavic ? 
-        "${bandInfo}NavIC Basic" : 
-        "${bandInfo}$systemName Basic";
-    } else {
-      _locationQuality = isUsingNavic ? 
-        "${bandInfo}NavIC Low" : 
-        "${bandInfo}$systemName Low";
+    } catch (e) {
+      print("❌ Error disconnecting USB GNSS: $e");
     }
   }
 
@@ -918,7 +895,7 @@ class _HomeScreenState extends State<HomeScreen> {
     } else if (_lastValidMapCenter != null) {
       return _lastValidMapCenter!;
     } else {
-      return const LatLng(28.6139, 77.2090); // Default to New Delhi
+      return  LatLng(28.6139, 77.2090);
     }
   }
 
@@ -965,17 +942,13 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildLocationMarker() {
     final isNavic = _isUsingNavic && _isNavicSupported && _isNavicActive;
-    final isL5 = _activeBands.contains('L5');
-    final isL1 = _activeBands.contains('L1');
-    final isL2 = _activeBands.contains('L2');
-    final isS = _activeBands.contains('S');
+    final isL5 = _hasL5BandActive;
+    final isUsb = _usingExternalGnss;
     final accuracy = _currentPosition?.accuracy ?? 10.0;
 
     Color primaryColor;
     if (isL5) primaryColor = Colors.green;
-    else if (isL2) primaryColor = Colors.blue;
-    else if (isL1) primaryColor = Colors.orange;
-    else if (isS) primaryColor = Colors.purple;
+    else if (isUsb) primaryColor = Colors.teal;
     else primaryColor = isNavic ? Colors.green : _getSystemColor(_primarySystem);
 
     return Stack(
@@ -1059,6 +1032,23 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
               ),
+            if (isUsb)
+              Positioned(
+                top: 0,
+                left: 0,
+                child: Container(
+                  padding: const EdgeInsets.all(2),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    Icons.usb,
+                    color: Colors.teal,
+                    size: 10,
+                  ),
+                ),
+              ),
           ],
         ),
       ],
@@ -1066,6 +1056,9 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildSatelliteListPanel() {
+    final satelliteSummary = _locationService.getSatelliteSummary();
+    final satelliteList = satelliteSummary['list'] as List<dynamic>? ?? [];
+
     return Container(
       width: MediaQuery.of(context).size.width * 0.9,
       padding: const EdgeInsets.all(16),
@@ -1104,7 +1097,7 @@ class _HomeScreenState extends State<HomeScreen> {
               Row(
                 children: [
                   Text(
-                    "${_satelliteDetails.length} sats",
+                    "${satelliteList.length} sats",
                     style: TextStyle(
                       fontWeight: FontWeight.w600,
                       color: Colors.grey.shade600,
@@ -1122,30 +1115,49 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ],
           ),
-          
+
           const SizedBox(height: 12),
-          
-          if (_satelliteDetails.isNotEmpty)
+
+          if (satelliteList.isNotEmpty)
             SizedBox(
               height: 300,
               child: ListView.builder(
                 shrinkWrap: true,
                 physics: const BouncingScrollPhysics(),
-                itemCount: _satelliteDetails.length,
+                itemCount: satelliteList.length,
                 itemBuilder: (context, index) {
-                  final sat = _satelliteDetails[index];
-                  return _buildSatelliteListItem(sat);
+                  final satData = satelliteList[index];
+                  // You would need to convert this back to GnssSatellite
+                  // For now, display as text
+                  return _buildSatelliteListItem(satData);
                 },
               ),
             )
           else
             _buildNoSatellitesView(),
-          
+
           const SizedBox(height: 12),
-          
+
           if (_primarySystem.isNotEmpty)
             _buildPrimarySystemInfo(),
         ],
+      ),
+    );
+  }
+
+  Widget _buildSatelliteListItem(dynamic satData) {
+    // This is a simplified version - you'll need to parse the satellite data properly
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade50,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Text(
+        satData.toString(),
+        style: const TextStyle(fontSize: 12),
       ),
     );
   }
@@ -1194,10 +1206,9 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ],
           ),
-          
+
           const SizedBox(height: 12),
-          
-          // Current Active Band
+
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
@@ -1213,7 +1224,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     Icon(Icons.wifi_tethering, color: Colors.green.shade700, size: 18),
                     const SizedBox(width: 8),
                     Text(
-                      "CURRENT ACTIVE BAND",
+                      "BAND STATUS",
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.bold,
@@ -1223,440 +1234,48 @@ class _HomeScreenState extends State<HomeScreen> {
                   ],
                 ),
                 const SizedBox(height: 8),
-                if (_activeBands.isNotEmpty)
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: _activeBands.map((band) {
-                      // Get band frequency information
-                      String bandDisplay = band;
-                      if (_availableBands.containsKey(band)) {
-                        final bandInfo = _availableBands[band];
-                        if (bandInfo is Map && bandInfo.containsKey('frequencyHz')) {
-                          final freq = bandInfo['frequencyHz'];
-                          if (freq != null && freq > 0) {
-                            bandDisplay = '$band (${(freq / 1e6).toStringAsFixed(2)} MHz)';
-                          }
-                        }
-                      }
-                      
-                      return Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: Colors.green.shade100,
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: Colors.green.shade300),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              Icons.circle,
-                              size: 10,
-                              color: Colors.green.shade700,
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              bandDisplay,
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                color: Colors.green.shade800,
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    }).toList(),
-                  )
-                else
-                  Text(
-                    "No active bands detected",
-                    style: TextStyle(
-                      color: Colors.grey.shade600,
-                      fontSize: 14,
-                    ),
-                  ),
+                Row(
+                  children: [
+                    _buildBandStatusChip("L5", _hasL5Band, _hasL5BandActive),
+                    const SizedBox(width: 8),
+                    _buildBandStatusChip("USB", _usingExternalGnss, _usingExternalGnss),
+                  ],
+                ),
               ],
             ),
           ),
-          
-          const SizedBox(height: 12),
-          
-          // Band Statistics
-          if (_bandSatelliteCounts.isNotEmpty)
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.purple.shade50,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.purple.shade200),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(Icons.analytics, color: Colors.purple.shade700, size: 18),
-                      const SizedBox(width: 8),
-                      Text(
-                        "BAND STATISTICS",
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.purple.shade700,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 12,
-                    runSpacing: 12,
-                    children: _bandSatelliteCounts.entries.map((entry) {
-                      final band = entry.key;
-                      final count = entry.value;
-                      final avgSignal = _bandAverageSignals[band] ?? 0.0;
-                      final isActive = _activeBands.contains(band);
-                      
-                      // Get frequency for display
-                      String bandDisplay = band;
-                      if (_availableBands.containsKey(band)) {
-                        final bandInfo = _availableBands[band];
-                        if (bandInfo is Map && bandInfo.containsKey('frequencyHz')) {
-                          final freq = bandInfo['frequencyHz'];
-                          if (freq != null && freq > 0) {
-                            bandDisplay = '$band\n(${(freq / 1e6).toStringAsFixed(2)} MHz)';
-                          }
-                        }
-                      }
-                      
-                      return Container(
-                        width: 100,
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: isActive ? Colors.purple.shade100 : Colors.grey.shade100,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: isActive ? Colors.purple.shade300 : Colors.grey.shade300,
-                          ),
-                        ),
-                        child: Column(
-                          children: [
-                            Text(
-                              bandDisplay,
-                              style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.bold,
-                                color: isActive ? Colors.purple.shade800 : Colors.grey.shade700,
-                              ),
-                              textAlign: TextAlign.center,
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              "$count sats",
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: isActive ? Colors.purple.shade600 : Colors.grey.shade600,
-                              ),
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              "${avgSignal.toStringAsFixed(1)} dB-Hz",
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: isActive ? Colors.purple.shade600 : Colors.grey.shade600,
-                              ),
-                            ),
-                            if (isActive)
-                              Container(
-                                margin: const EdgeInsets.only(top: 4),
-                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: Colors.green.shade100,
-                                  borderRadius: BorderRadius.circular(4),
-                                ),
-                                child: Text(
-                                  "ACTIVE",
-                                  style: TextStyle(
-                                    fontSize: 9,
-                                    color: Colors.green.shade800,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ),
-                          ],
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                ],
-              ),
-            ),
         ],
       ),
     );
   }
 
-  Widget _buildSatelliteListItem(GnssSatellite satellite) {
-    final system = satellite.system;
-    final svid = satellite.svid;
-    final cn0 = satellite.cn0DbHz ?? 0.0;
-    final used = satellite.usedInFix ?? false;
-    final elevation = satellite.elevation ?? 0.0;
-    final azimuth = satellite.azimuth ?? 0.0;
-    final carrierFrequency = satellite.carrierFrequencyHz;
-    final signalStrength = _getSignalStrengthString(cn0);
-    final systemColor = _getSystemColor(system);
-    final signalColor = _getSignalColor(cn0);
-    final countryFlag = _getCountryFlag(system);
-    final systemFullName = _getSystemFullName(system);
-    final systemCountry = _getSystemCountry(system);
-
+  Widget _buildBandStatusChip(String band, bool supported, bool active) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
-        color: Colors.grey.shade50,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey.shade200),
+        color: supported ? (active ? Colors.green.shade100 : Colors.blue.shade100) : Colors.grey.shade100,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: supported ? (active ? Colors.green.shade300 : Colors.blue.shade300) : Colors.grey.shade300),
       ),
       child: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: systemColor.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  countryFlag,
-                  style: const TextStyle(fontSize: 16),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  _getConstellationAbbreviation(system),
-                  style: TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                    color: systemColor,
-                  ),
-                ),
-              ],
-            ),
+          Icon(
+            Icons.circle,
+            size: 10,
+            color: supported ? (active ? Colors.green.shade700 : Colors.blue.shade700) : Colors.grey.shade700,
           ),
-
-          const SizedBox(width: 12),
-
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Text(
-                      "PRN-$svid",
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.grey.shade800,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: signalColor.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(4),
-                        border: Border.all(color: signalColor),
-                      ),
-                      child: Text(
-                        signalStrength,
-                        style: TextStyle(
-                          fontSize: 10,
-                          color: signalColor,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                    if (used)
-                      Container(
-                        margin: const EdgeInsets.only(left: 6),
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: Colors.green.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(4),
-                          border: Border.all(color: Colors.green),
-                        ),
-                        child: const Text(
-                          "IN FIX",
-                          style: TextStyle(
-                            fontSize: 10,
-                            color: Colors.green,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-
-                const SizedBox(height: 6),
-
-                Row(
-                  children: [
-                    Icon(Icons.signal_cellular_alt, size: 14, color: signalColor),
-                    const SizedBox(width: 4),
-                    Text(
-                      "${cn0.toStringAsFixed(1)} dB-Hz",
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: signalColor,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
-
-                const SizedBox(height: 4),
-
-                Row(
-                  children: [
-                    Icon(Icons.vertical_align_top, size: 14, color: Colors.orange.shade600),
-                    const SizedBox(width: 4),
-                    Text(
-                      "${elevation.toStringAsFixed(0)}°",
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.orange.shade600,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Icon(Icons.compass_calibration, size: 14, color: Colors.purple.shade600),
-                    const SizedBox(width: 4),
-                    Text(
-                      "${azimuth.toStringAsFixed(0)}°",
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.purple.shade600,
-                      ),
-                    ),
-
-                    if (carrierFrequency != null && carrierFrequency > 0)
-                      Row(
-                        children: [
-                          const SizedBox(width: 12),
-                          Icon(Icons.waves, size: 14, color: Colors.blue.shade600),
-                          const SizedBox(width: 4),
-                          Text(
-                            "${(carrierFrequency / 1e6).toStringAsFixed(1)} MHz",
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.blue.shade600,
-                            ),
-                          ),
-                        ],
-                      ),
-                  ],
-                ),
-
-                const SizedBox(height: 4),
-                Text(
-                  "$systemFullName • $systemCountry",
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: Colors.grey.shade600,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
-            ),
-          ),
-
-          Container(
-            padding: const EdgeInsets.all(4),
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: used ? Colors.green.withOpacity(0.2) : Colors.grey.withOpacity(0.2),
-            ),
-            child: Icon(
-              used ? Icons.check_circle : Icons.radio_button_unchecked,
-              size: 20,
-              color: used ? Colors.green : Colors.grey,
+          const SizedBox(width: 6),
+          Text(
+            "$band ${active ? '(Active)' : supported ? '(Available)' : '(Unavailable)'}",
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              color: supported ? (active ? Colors.green.shade800 : Colors.blue.shade800) : Colors.grey.shade800,
             ),
           ),
         ],
       ),
     );
-  }
-
-  String _getSignalStrengthString(double cn0) {
-    if (cn0 >= 35) return "EXCELLENT";
-    if (cn0 >= 25) return "STRONG";
-    if (cn0 >= 18) return "GOOD";
-    if (cn0 >= 10) return "WEAK";
-    return "VERY WEAK";
-  }
-
-  String _getConstellationAbbreviation(String system) {
-    switch (system.toUpperCase()) {
-      case 'IRNSS':
-      case 'NAVIC': return 'IRN';
-      case 'GPS': return 'GPS';
-      case 'GLONASS': return 'GLO';
-      case 'GALILEO': return 'GAL';
-      case 'BEIDOU': return 'BDS';
-      case 'QZSS': return 'QZS';
-      case 'SBAS': return 'SBS';
-      default: return system.length > 3 ? system.substring(0, 3) : system;
-    }
-  }
-
-  String _getCountryFlag(String system) {
-    switch (system.toUpperCase()) {
-      case 'IRNSS':
-      case 'NAVIC': return '🇮🇳';
-      case 'GPS': return '🇺🇸';
-      case 'GLONASS': return '🇷🇺';
-      case 'GALILEO': return '🇪🇺';
-      case 'BEIDOU':
-      case 'BDS': return '🇨🇳';
-      case 'QZSS': return '🇯🇵';
-      case 'SBAS': return '🌐';
-      default: return '🛰️';
-    }
-  }
-
-  String _getSystemFullName(String system) {
-    switch (system.toUpperCase()) {
-      case 'IRNSS':
-      case 'NAVIC': return 'Indian Regional Navigation Satellite System';
-      case 'GPS': return 'Global Positioning System';
-      case 'GLONASS': return 'Global Navigation Satellite System';
-      case 'GALILEO': return 'Galileo Satellite Navigation';
-      case 'BEIDOU':
-      case 'BDS': return 'BeiDou Navigation Satellite System';
-      case 'QZSS': return 'Quasi-Zenith Satellite System';
-      case 'SBAS': return 'Satellite Based Augmentation System';
-      default: return system;
-    }
-  }
-
-  String _getSystemCountry(String system) {
-    switch (system.toUpperCase()) {
-      case 'IRNSS':
-      case 'NAVIC': return 'India';
-      case 'GPS': return 'United States';
-      case 'GLONASS': return 'Russia';
-      case 'GALILEO': return 'European Union';
-      case 'BEIDOU':
-      case 'BDS': return 'China';
-      case 'QZSS': return 'Japan';
-      case 'SBAS': return 'Multiple Countries';
-      default: return 'International';
-    }
   }
 
   Widget _buildNoSatellitesView() {
@@ -1687,6 +1306,12 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             textAlign: TextAlign.center,
           ),
+          const SizedBox(height: 12),
+          ElevatedButton.icon(
+            onPressed: _refreshLocation,
+            icon: const Icon(Icons.refresh),
+            label: const Text("Refresh"),
+          ),
         ],
       ),
     );
@@ -1695,7 +1320,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildPrimarySystemInfo() {
     Color primaryColor = _getSystemColor(_primarySystem);
     bool isNavicPrimary = _primarySystem.contains("NavIC");
-    
+
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -1737,29 +1362,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   ],
                 ),
               ),
-              if (_hasL5Band && _hasSBand)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: Colors.green.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(Icons.satellite_alt, size: 12, color: Colors.green),
-                      const SizedBox(width: 4),
-                      Text(
-                        "NavIC",
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: Colors.green,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              if (_hasL5Band)
+              if (_hasL5Band && _hasL5BandActive)
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
@@ -1771,7 +1374,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       Icon(Icons.speed, size: 12, color: Colors.green),
                       const SizedBox(width: 4),
                       Text(
-                        "L5 ${(_l5Confidence * 100).toStringAsFixed(0)}%",
+                        "L5 Active",
                         style: TextStyle(
                           fontSize: 11,
                           color: Colors.green,
@@ -1783,10 +1386,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
             ],
           ),
-          
+
           const SizedBox(height: 8),
-          
-          if (_chipsetVendor != "Unknown")
+
+          if (_chipsetVendor != "Unknown" && _chipsetModel != "Unknown")
             Row(
               children: [
                 Icon(Icons.memory, size: 14, color: Colors.grey.shade600),
@@ -1803,22 +1406,41 @@ class _HomeScreenState extends State<HomeScreen> {
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                if (_chipsetConfidence > 0)
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: Colors.blue.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(4),
+              ],
+            ),
+
+          if (_usingExternalGnss)
+            Row(
+              children: [
+                Icon(Icons.usb, size: 14, color: Colors.green.shade600),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    _externalDeviceInfo,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.green.shade700,
+                      fontWeight: FontWeight.w500,
                     ),
-                    child: Text(
-                      "${(_chipsetConfidence * 100).toStringAsFixed(0)}%",
-                      style: TextStyle(
-                        fontSize: 10,
-                        color: Colors.blue,
-                        fontWeight: FontWeight.bold,
-                      ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.green.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    "CONNECTED",
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: Colors.green,
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
+                ),
               ],
             ),
         ],
@@ -1841,14 +1463,6 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Color _getSignalColor(double cn0) {
-    if (cn0 >= 35) return Colors.green;
-    if (cn0 >= 25) return Colors.blue;
-    if (cn0 >= 18) return Colors.orange;
-    if (cn0 >= 10) return Colors.amber;
-    return Colors.red;
-  }
-
   Color _getSystemColor(String system) {
     switch (system.toUpperCase()) {
       case 'IRNSS':
@@ -1865,34 +1479,33 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Create a string for the AppBar subtitle
     String appBarSubtitle = "";
-    
-    if (_chipsetVendor != "Unknown") {
-      appBarSubtitle = "$_chipsetVendor $_chipsetModel";
-      
+
+    // Add USB status
+    if (_usingExternalGnss) {
+      appBarSubtitle = "USB GNSS Connected";
+      if (_chipsetVendor != "Unknown") {
+        appBarSubtitle += " • $_chipsetVendor $_chipsetModel";
+      }
+    } else {
       // Add NavIC support status
-      final hasNavicBands = _hasL5Band && _hasSBand;
-      if (_isNavicSupported && hasNavicBands) {
-        appBarSubtitle += " • NavIC Supported";
-      } else if (hasNavicBands) {
-        appBarSubtitle += " • Has L5+S Bands";
+      if (_isNavicSupported && _isNavicActive) {
+        appBarSubtitle += "NavIC Active";
+      } else if (_isNavicSupported) {
+        appBarSubtitle += "NavIC Supported";
       }
-      
+
       // Add L5 band info
-      if (_hasL5Band) {
-        appBarSubtitle += " • L5 Band";
+      if (_hasL5BandActive) {
+        appBarSubtitle += appBarSubtitle.isNotEmpty ? " • L5 Active" : "L5 Active";
+      } else if (_hasL5Band) {
+        appBarSubtitle += appBarSubtitle.isNotEmpty ? " • L5 Available" : "L5 Available";
       }
-      
-      // Add S band info
-      if (_hasSBand) {
-        appBarSubtitle += " • S Band";
-      }
-      
-      // Add current location source - Show actual system being used
-      final displaySystem = _isUsingNavic ? 'NavIC' : _primarySystem;
-      appBarSubtitle += " • Using $displaySystem";
     }
+
+    // Add current location source
+    final displaySystem = _isUsingNavic ? 'NavIC' : _primarySystem;
+    appBarSubtitle += appBarSubtitle.isNotEmpty ? " • Using $displaySystem" : "Using $displaySystem";
 
     return Scaffold(
       appBar: AppBar(
@@ -1939,8 +1552,8 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           IconButton(
             icon: const Icon(Icons.satellite_alt),
-            onPressed: _updateSatelliteData,
-            tooltip: 'Update Satellites',
+            onPressed: _toggleSatelliteList,
+            tooltip: 'Satellites',
           ),
           IconButton(
             icon: const Icon(Icons.settings_input_antenna),
@@ -1952,15 +1565,15 @@ class _HomeScreenState extends State<HomeScreen> {
             onPressed: _toggleBottomPanel,
             tooltip: _isBottomPanelVisible ? 'Hide Panel' : 'Show Panel',
           ),
-          if (_currentPosition != null)
-            IconButton(
-              icon: const Icon(Icons.emergency_share_sharp),
-              iconSize: 24,
-              onPressed: () => Navigator.push(
-                context, 
-                MaterialPageRoute(builder: (context) => const EmergencyPage()),
-              ),
+          IconButton(
+            icon: Icon(
+              _usingExternalGnss ? Icons.usb : Icons.usb_off,
+              color: _usingExternalGnss ? Colors.green : Colors.grey,
             ),
+            onPressed: _checkUsbDevices,
+            tooltip: _usingExternalGnss ? 'USB Connected' : 'Check USB',
+          ),
+
         ],
       ),
       body: Stack(
@@ -2014,10 +1627,17 @@ class _HomeScreenState extends State<HomeScreen> {
               onPressed: _refreshLocation,
               backgroundColor: _isUsingNavic ? Colors.green : _getSystemColor(_primarySystem),
               child: Icon(
-                _isUsingNavic ? Icons.satellite_alt : _getSystemIcon(_primarySystem), 
-                color: Colors.white
+                _isUsingNavic ? Icons.satellite_alt : _getSystemIcon(_primarySystem),
+                color: Colors.white,
               ),
               tooltip: _isUsingNavic ? 'NavIC Location' : '$_primarySystem Location',
+            ),
+          if (_usingExternalGnss)
+            FloatingActionButton.small(
+              onPressed: _disconnectUsbGnss,
+              backgroundColor: Colors.red,
+              child: const Icon(Icons.usb_off, color: Colors.white),
+              tooltip: 'Disconnect USB',
             ),
         ],
       ),
@@ -2025,9 +1645,8 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildLoadingOverlay() {
-    // Determine display system name
     final displaySystem = _isUsingNavic ? 'NavIC' : _primarySystem;
-    
+
     return Container(
       color: Colors.black.withOpacity(0.4),
       child: Center(
@@ -2036,7 +1655,7 @@ class _HomeScreenState extends State<HomeScreen> {
           children: [
             CircularProgressIndicator(
               valueColor: AlwaysStoppedAnimation<Color>(
-                _isUsingNavic ? Colors.green : _getSystemColor(_primarySystem)
+                  _isUsingNavic ? Colors.green : _getSystemColor(_primarySystem)
               ),
               strokeWidth: 3,
             ),
@@ -2051,9 +1670,9 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 8),
             Text(
-              _isUsingNavic ? 
-                "Using NavIC positioning" : 
-                "Using $_primarySystem positioning",
+              _isUsingNavic ?
+              "Using NavIC positioning" :
+              "Using $_primarySystem positioning",
               style: TextStyle(
                 color: Colors.white70,
                 fontSize: 14,
@@ -2214,9 +1833,9 @@ class _HomeScreenState extends State<HomeScreen> {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Icon(
-            _isUsingNavic ? Icons.satellite_alt : _getSystemIcon(_primarySystem), 
-            color: _isUsingNavic ? Colors.green.shade400 : _getSystemColor(_primarySystem).withOpacity(0.7), 
-            size: 48
+            _isUsingNavic ? Icons.satellite_alt : _getSystemIcon(_primarySystem),
+            color: _isUsingNavic ? Colors.green.shade400 : _getSystemColor(_primarySystem).withOpacity(0.7),
+            size: 48,
           ),
           const SizedBox(height: 12),
           Text(
@@ -2229,24 +1848,14 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           const SizedBox(height: 4),
           Text(
-            _isUsingNavic ? 
-              "Using NavIC with ${_hasL5Band && _hasSBand ? 'L5 & S bands' : 'enhanced positioning'}" : 
-              "Using $_primarySystem for positioning",
+            _isUsingNavic ?
+            "Using NavIC with ${_hasL5BandActive ? 'L5 band active' : 'enhanced positioning'}" :
+            "Using $_primarySystem for positioning",
             style: TextStyle(
               color: Colors.grey.shade500,
               fontSize: 14,
             ),
           ),
-          if (_activeBands.isNotEmpty) ...[
-            const SizedBox(height: 4),
-            Text(
-              "Active Bands: ${_activeBands.join(', ')}",
-              style: TextStyle(
-                color: Colors.grey.shade500,
-                fontSize: 12,
-              ),
-            ),
-          ],
         ],
       ),
     );
@@ -2255,31 +1864,43 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildSystemStatusHeader() {
     final pos = _currentPosition!;
     final isNavic = _isUsingNavic && _isNavicSupported && _isNavicActive;
-    final activeBand = _activeBands.isNotEmpty ? _activeBands.first : "L1";
+    final isUsb = _usingExternalGnss;
+
+    Color backgroundColor;
+    Color iconColor;
+    String systemText;
+
+    if (isUsb) {
+      backgroundColor = Colors.teal.withOpacity(0.15);
+      iconColor = Colors.teal;
+      systemText = "USB GNSS POSITIONING";
+    } else if (isNavic) {
+      backgroundColor = Colors.green.withOpacity(0.15);
+      iconColor = Colors.green;
+      systemText = "NAVIC POSITIONING";
+    } else {
+      backgroundColor = _getSystemColor(_primarySystem).withOpacity(0.15);
+      iconColor = _getSystemColor(_primarySystem);
+      systemText = "$_primarySystem POSITIONING";
+    }
 
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: isNavic
-            ? Colors.green.withOpacity(0.15)
-            : _getSystemColor(_primarySystem).withOpacity(0.15),
+        color: backgroundColor,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: isNavic
-              ? Colors.green.withOpacity(0.3)
-              : _getSystemColor(_primarySystem).withOpacity(0.3),
-        ),
+        border: Border.all(color: iconColor.withOpacity(0.3)),
       ),
       child: Row(
         children: [
           Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
-              color: isNavic ? Colors.green : _getSystemColor(_primarySystem),
+              color: iconColor,
               shape: BoxShape.circle,
             ),
             child: Icon(
-              isNavic ? Icons.satellite_alt : _getSystemIcon(_primarySystem),
+              isUsb ? Icons.usb : (isNavic ? Icons.satellite_alt : _getSystemIcon(_primarySystem)),
               color: Colors.white,
               size: 20,
             ),
@@ -2292,41 +1913,23 @@ class _HomeScreenState extends State<HomeScreen> {
                 Row(
                   children: [
                     Text(
-                      isNavic ? "NAVIC POSITIONING" : "$_primarySystem POSITIONING",
+                      systemText,
                       style: TextStyle(
                         fontWeight: FontWeight.w700,
                         fontSize: 10,
-                        color: isNavic ? Colors.green.shade800 : _getSystemColor(_primarySystem).withOpacity(0.9),
+                        color: iconColor.withOpacity(0.9),
                       ),
                     ),
-                    if (_activeBands.isNotEmpty) ...[
+                    if (_hasL5BandActive) ...[
                       const SizedBox(width: 6),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: _getBandColor(activeBand).withOpacity(0.2),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          activeBand,
-                          style: TextStyle(
-                            fontSize: 10,
-                            color: _getBandColor(activeBand),
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                    ],
-                    if (isNavic)
-                      Container(
-                        margin: const EdgeInsets.only(left: 6),
                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                         decoration: BoxDecoration(
                           color: Colors.green.withOpacity(0.2),
                           borderRadius: BorderRadius.circular(4),
                         ),
                         child: Text(
-                          "NAVIC",
+                          "L5 Active",
                           style: TextStyle(
                             fontSize: 10,
                             color: Colors.green,
@@ -2334,6 +1937,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                         ),
                       ),
+                    ],
                   ],
                 ),
                 const SizedBox(height: 2),
@@ -2341,24 +1945,34 @@ class _HomeScreenState extends State<HomeScreen> {
                   _locationQuality,
                   style: TextStyle(
                     fontSize: 12,
-                    color: isNavic ? Colors.green.shade600 : _getSystemColor(_primarySystem).withOpacity(0.8),
+                    color: iconColor.withOpacity(0.8),
                     fontWeight: FontWeight.w500,
                   ),
                 ),
-                if (_chipsetVendor != "Unknown") ...[
+                if (_chipsetVendor != "Unknown" && _chipsetModel != "Unknown") ...[
                   const SizedBox(height: 2),
                   Text(
                     "$_chipsetVendor $_chipsetModel",
                     style: TextStyle(
                       fontSize: 10,
-                      color: isNavic ? Colors.green.shade500 : _getSystemColor(_primarySystem).withOpacity(0.7),
+                      color: iconColor.withOpacity(0.7),
                     ),
                   ),
                 ],
-                if (isNavic && _hasL5Band && _hasSBand) ...[
+                if (isUsb && _externalDeviceInfo.isNotEmpty) ...[
                   const SizedBox(height: 2),
                   Text(
-                    "L5 + S Bands Active",
+                    _externalDeviceInfo,
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: iconColor.withOpacity(0.7),
+                    ),
+                  ),
+                ],
+                if (isNavic && _hasL5BandActive) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    "L5 Band Active",
                     style: TextStyle(
                       fontSize: 10,
                       color: Colors.green.shade600,
@@ -2387,25 +2001,6 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
     );
-  }
-
-  Color _getBandColor(String band) {
-    switch (band.toUpperCase()) {
-      case 'L5': return Colors.green;
-      case 'L2': return Colors.blue;
-      case 'L1': return Colors.orange;
-      case 'S': return Colors.purple;
-      case 'G1':
-      case 'G2':
-      case 'G3': return Colors.red; // GLONASS bands
-      case 'E1':
-      case 'E5':
-      case 'E5A': return Colors.purple; // Galileo bands
-      case 'B1':
-      case 'B2':
-      case 'B2A': return Colors.orange; // BeiDou bands
-      default: return Colors.grey;
-    }
   }
 
   Widget _buildCoordinatesSection() {
@@ -2502,21 +2097,21 @@ class _HomeScreenState extends State<HomeScreen> {
           children: [
             Expanded(
               child: _buildInfoCard(
-                icon: Icons.memory,
-                title: "CHIPSET",
-                value: "$_chipsetVendor $_chipsetModel",
-                color: Colors.purple.shade50,
-                iconColor: Colors.purple.shade700,
+                icon: Icons.settings_input_antenna,
+                title: "ACTIVE BAND",
+                value: _hasL5BandActive ? "L5" : "L1",
+                color: _hasL5BandActive ? Colors.green.withOpacity(0.1) : Colors.orange.withOpacity(0.1),
+                iconColor: _hasL5BandActive ? Colors.green : Colors.orange,
               ),
             ),
             const SizedBox(width: 12),
             Expanded(
               child: _buildInfoCard(
-                icon: Icons.settings_input_antenna,
-                title: "ACTIVE BAND",
-                value: _activeBands.isNotEmpty ? _activeBands.join(', ') : "None",
-                color: _activeBands.isNotEmpty ? _getBandColor(_activeBands.first).withOpacity(0.1) : Colors.grey.shade50,
-                iconColor: _activeBands.isNotEmpty ? _getBandColor(_activeBands.first) : Colors.grey.shade700,
+                icon: Icons.usb,
+                title: "USB STATUS",
+                value: _usingExternalGnss ? "Connected" : "Disconnected",
+                color: _usingExternalGnss ? Colors.green.shade50 : Colors.grey.shade50,
+                iconColor: _usingExternalGnss ? Colors.green.shade700 : Colors.grey.shade700,
               ),
             ),
           ],
@@ -2526,6 +2121,8 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildSatelliteSummaryCard() {
+    final satelliteSummary = _locationService.getSatelliteSummary();
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -2575,21 +2172,43 @@ class _HomeScreenState extends State<HomeScreen> {
                     ],
                   ),
                 ),
+              if (_usingExternalGnss)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.teal.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.usb, size: 12, color: Colors.teal),
+                      const SizedBox(width: 4),
+                      Text(
+                        "USB",
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.teal,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
             ],
           ),
           const SizedBox(height: 12),
 
           Row(
             children: [
-              _buildSatelliteStat("Total Sats", "$_totalSatelliteCount", Colors.blue),
+              _buildSatelliteStat("Total Sats", "${satelliteSummary['total'] ?? 0}", Colors.blue),
               const SizedBox(width: 12),
-              _buildSatelliteStat("NavIC", "$_navicSatelliteCount", Colors.green),
+              _buildSatelliteStat("NavIC", "${satelliteSummary['navic'] ?? 0}", Colors.green),
               const SizedBox(width: 12),
+              _buildSatelliteStat("GPS", "${satelliteSummary['gps'] ?? 0}", Colors.blue),
             ],
           ),
           const SizedBox(height: 8),
-          
-          // Location source indicator
+
           Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
@@ -2725,25 +2344,22 @@ class _HomeScreenState extends State<HomeScreen> {
     IconData bannerIcon;
     String bannerStatus;
 
-    // Check for NavIC support (requires both L5 and S bands)
-    final bool hasNavicBands = _hasL5Band && _hasSBand;
-    
-    if (_isUsingNavic && _isNavicActive && hasNavicBands) {
+    if (_usingExternalGnss) {
+      bannerColor = Colors.teal.shade50;
+      bannerIconColor = Colors.teal;
+      bannerIcon = Icons.usb;
+      bannerStatus = "USB GNSS Connected";
+    } else if (_isUsingNavic && _isNavicActive && _hasL5BandActive) {
       bannerColor = Colors.green.shade50;
       bannerIconColor = Colors.green;
       bannerIcon = Icons.satellite_alt;
       bannerStatus = "NavIC Active";
-    } else if (_isNavicSupported && hasNavicBands) {
+    } else if (_isNavicSupported && _hasL5Band) {
       bannerColor = Colors.green.shade50;
       bannerIconColor = Colors.green;
       bannerIcon = Icons.satellite_alt;
       bannerStatus = "NavIC Ready";
-    } else if (hasNavicBands) {
-      bannerColor = Colors.blue.shade50;
-      bannerIconColor = Colors.blue;
-      bannerIcon = Icons.check_circle;
-      bannerStatus = "L5 + S Bands";
-    } else if (_hasL5Band && _activeBands.contains('L5')) {
+    } else if (_hasL5BandActive) {
       bannerColor = Colors.blue.shade50;
       bannerIconColor = Colors.blue;
       bannerIcon = Icons.speed;
@@ -2753,11 +2369,6 @@ class _HomeScreenState extends State<HomeScreen> {
       bannerIconColor = Colors.blue;
       bannerIcon = Icons.speed;
       bannerStatus = "L5 Available";
-    } else if (_hasSBand) {
-      bannerColor = Colors.purple.shade50;
-      bannerIconColor = Colors.purple;
-      bannerIcon = Icons.settings_input_antenna;
-      bannerStatus = "S-Band Available";
     } else {
       bannerColor = Colors.orange.shade50;
       bannerIconColor = Colors.orange;
@@ -2807,22 +2418,21 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
           ),
-          if (_activeBands.isNotEmpty)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: bannerIconColor.withOpacity(0.2),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Text(
-                _activeBands.join(', '),
-                style: TextStyle(
-                  color: bannerIconColor,
-                  fontSize: 10,
-                  fontWeight: FontWeight.bold,
-                ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: bannerIconColor.withOpacity(0.2),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              _hasL5BandActive ? "L5 Active" : _usingExternalGnss ? "USB" : "Standard",
+              style: TextStyle(
+                color: bannerIconColor,
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
               ),
             ),
+          ),
           if (_isUsingNavic)
             Container(
               margin: const EdgeInsets.only(left: 8),
@@ -2840,6 +2450,29 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
             ),
+          if (_usingExternalGnss)
+            Container(
+              margin: const EdgeInsets.only(left: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.teal.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.usb, size: 10, color: Colors.teal),
+                  const SizedBox(width: 2),
+                  Text(
+                    "USB",
+                    style: TextStyle(
+                      color: Colors.teal,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+            ),
         ],
       ),
     );
@@ -2847,6 +2480,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    _detectingSubscription.cancel();
+    _hardwareStateSubscription.cancel();
+    _satellitesSubscription.cancel();
+    _positionSubscription.cancel();
     _scrollController.dispose();
     _locationService.dispose();
     super.dispose();

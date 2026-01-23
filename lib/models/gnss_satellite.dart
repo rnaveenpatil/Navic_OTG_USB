@@ -16,6 +16,8 @@ class GnssSatellite {
   final int detectionCount;
   final String signalStrength;
   final int timestamp;
+  final bool externalGnss; // Added for USB GNSS
+  final bool isL5Band; // Added for L5 band detection
 
   GnssSatellite({
     required this.svid,
@@ -34,6 +36,8 @@ class GnssSatellite {
     required this.detectionCount,
     required this.signalStrength,
     required this.timestamp,
+    this.externalGnss = false, // Default to false
+    this.isL5Band = false, // Default to false
   });
 
   factory GnssSatellite.fromMap(Map<String, dynamic> map) {
@@ -47,33 +51,38 @@ class GnssSatellite {
     final detectionCount = map['detectionCount'];
     final timestamp = map['timestamp'];
     final constellation = map['constellation'];
+    final externalGnss = map['externalGnss'];
+    final isL5Band = map['isL5Band'];
 
     return GnssSatellite(
       svid: svid is int ? svid : (svid is num ? svid.toInt() : 0),
       system: map['system'] as String? ?? 'UNKNOWN',
-      constellation: constellation is int ? 
-        _getConstellationName(constellation as int) : 
-        (constellation is String ? constellation as String : 'UNKNOWN'),
+      constellation: constellation is int ?
+      _getConstellationName(constellation as int) :
+      (constellation is String ? constellation as String : 'UNKNOWN'),
       countryFlag: map['countryFlag'] as String? ?? '🌐',
-      cn0DbHz: cn0DbHz is double ? cn0DbHz : 
-               (cn0DbHz is num ? cn0DbHz.toDouble() : 0.0),
+      cn0DbHz: cn0DbHz is double ? cn0DbHz :
+      (cn0DbHz is num ? cn0DbHz.toDouble() : 0.0),
       usedInFix: map['usedInFix'] as bool? ?? false,
-      elevation: elevation is double ? elevation : 
-                (elevation is num ? elevation.toDouble() : 0.0),
-      azimuth: azimuth is double ? azimuth : 
-              (azimuth is num ? azimuth.toDouble() : 0.0),
+      elevation: elevation is double ? elevation :
+      (elevation is num ? elevation.toDouble() : 0.0),
+      azimuth: azimuth is double ? azimuth :
+      (azimuth is num ? azimuth.toDouble() : 0.0),
       hasEphemeris: map['hasEphemeris'] as bool? ?? false,
       hasAlmanac: map['hasAlmanac'] as bool? ?? false,
       frequencyBand: map['frequencyBand'] as String? ?? 'UNKNOWN',
-      carrierFrequencyHz: carrierFreq is double ? carrierFreq : 
-                        (carrierFreq is num ? carrierFreq.toDouble() : null),
-      detectionTime: detectionTime is int ? detectionTime : 
-                    (detectionTime is num ? detectionTime.toInt() : 0),
-      detectionCount: detectionCount is int ? detectionCount : 
-                     (detectionCount is num ? detectionCount.toInt() : 1),
+      carrierFrequencyHz: carrierFreq is double ? carrierFreq :
+      (carrierFreq is num ? carrierFreq.toDouble() : null),
+      detectionTime: detectionTime is int ? detectionTime :
+      (detectionTime is num ? detectionTime.toInt() : 0),
+      detectionCount: detectionCount is int ? detectionCount :
+      (detectionCount is num ? detectionCount.toInt() : 1),
       signalStrength: map['signalStrength'] as String? ?? 'UNKNOWN',
-      timestamp: timestamp is int ? timestamp : 
-                (timestamp is num ? timestamp.toInt() : DateTime.now().millisecondsSinceEpoch),
+      timestamp: timestamp is int ? timestamp :
+      (timestamp is num ? timestamp.toInt() : DateTime.now().millisecondsSinceEpoch),
+      externalGnss: externalGnss is bool ? externalGnss : false,
+      isL5Band: isL5Band is bool ? isL5Band : (map['frequencyBand'] is String ?
+      (map['frequencyBand'] as String).contains('L5') : false),
     );
   }
 
@@ -108,12 +117,15 @@ class GnssSatellite {
       'detectionCount': detectionCount,
       'signalStrength': signalStrength,
       'timestamp': timestamp,
+      'externalGnss': externalGnss,
+      'isL5Band': isL5Band,
     };
   }
 
   @override
   String toString() {
-    return 'GnssSatellite(svid: $svid, system: $system, cn0DbHz: $cn0DbHz, usedInFix: $usedInFix)';
+    return 'GnssSatellite(svid: $svid, system: $system, cn0DbHz: ${cn0DbHz.toStringAsFixed(1)}dB, '
+        'usedInFix: $usedInFix, L5: $isL5Band, External: $externalGnss)';
   }
 }
 
@@ -126,6 +138,7 @@ class GnssSystemStats {
   final double averageSignal;
   final double utilization;
   final int signalCount;
+  final int l5SatelliteCount; // Added for L5 tracking
 
   GnssSystemStats({
     required this.name,
@@ -136,6 +149,7 @@ class GnssSystemStats {
     required this.averageSignal,
     required this.utilization,
     required this.signalCount,
+    this.l5SatelliteCount = 0, // Default to 0
   });
 
   factory GnssSystemStats.fromMap(Map<String, dynamic> map) {
@@ -146,6 +160,7 @@ class GnssSystemStats {
     final averageSignal = map['averageSignal'];
     final utilization = map['utilization'];
     final signalCount = map['signalCount'];
+    final l5SatelliteCount = map['l5SatelliteCount'];
 
     return GnssSystemStats(
       name: map['name'] as String? ?? 'UNKNOWN',
@@ -153,11 +168,13 @@ class GnssSystemStats {
       total: total is int ? total : (total is num ? total.toInt() : 0),
       used: used is int ? used : (used is num ? used.toInt() : 0),
       available: available is int ? available : (available is num ? available.toInt() : 0),
-      averageSignal: averageSignal is double ? averageSignal : 
-                    (averageSignal is num ? averageSignal.toDouble() : 0.0),
-      utilization: utilization is double ? utilization : 
-                  (utilization is num ? utilization.toDouble() : 0.0),
+      averageSignal: averageSignal is double ? averageSignal :
+      (averageSignal is num ? averageSignal.toDouble() : 0.0),
+      utilization: utilization is double ? utilization :
+      (utilization is num ? utilization.toDouble() : 0.0),
       signalCount: signalCount is int ? signalCount : (signalCount is num ? signalCount.toInt() : 0),
+      l5SatelliteCount: l5SatelliteCount is int ? l5SatelliteCount :
+      (l5SatelliteCount is num ? l5SatelliteCount.toInt() : 0),
     );
   }
 
@@ -171,11 +188,13 @@ class GnssSystemStats {
       'averageSignal': averageSignal,
       'utilization': utilization,
       'signalCount': signalCount,
+      'l5SatelliteCount': l5SatelliteCount,
     };
   }
 
   @override
   String toString() {
-    return 'GnssSystemStats(name: $name, total: $total, used: $used, signal: ${averageSignal.toStringAsFixed(1)}dB)';
+    return 'GnssSystemStats(name: $name, total: $total, used: $used, '
+        'signal: ${averageSignal.toStringAsFixed(1)}dB, L5: $l5SatelliteCount)';
   }
 }

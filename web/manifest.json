@@ -1,6 +1,6 @@
 {
-    "name": "navic_usb",
-    "short_name": "navic_usb",
+    "name": "navic_otg",
+    "short_name": "navic_otg",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
