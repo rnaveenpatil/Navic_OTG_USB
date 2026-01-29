@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Allow HTTP for OSM tile servers (some may use HTTP) -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">tile.openstreetmap.org</domain>
+        <domain includeSubdomains="true">a.tile.openstreetmap.org</domain>
+        <domain includeSubdomains="true">b.tile.openstreetmap.org</domain>
+        <domain includeSubdomains="true">c.tile.openstreetmap.org</domain>
+        <domain includeSubdomains="true">tile.osm.org</domain>
+        <domain includeSubdomains="true">otile1.mqcdn.com</domain>
+        <domain includeSubdomains="true">otile2.mqcdn.com</domain>
+        <domain includeSubdomains="true">otile3.mqcdn.com</domain>
+        <domain includeSubdomains="true">otile4.mqcdn.com</domain>
+    </domain-config>
+
+    <!-- Base configuration with trusted CAs -->
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

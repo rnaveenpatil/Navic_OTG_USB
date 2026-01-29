@@ -1,10 +1,9 @@
 // lib/services/location_service.dart
 import 'dart:async';
-//import 'dart:js_interop';
 import 'package:geolocator/geolocator.dart';
 import 'package:navic_ss/services/hardware_services.dart';
 import 'package:navic_ss/models/gnss_satellite.dart';
-import 'package:navic_ss/models/satellite_data_model.dart';
+import 'package:navic_ss/models/enhanced_position.dart';
 
 class EnhancedLocationService {
   // Hardware state (matches Java response)
@@ -13,7 +12,7 @@ class EnhancedLocationService {
   int _navicSatelliteCount = 0;
   int _totalSatelliteCount = 0;
   int _navicUsedInFix = 0;
-  String _detectionMethod = "UNKNOWN";
+  String _detectionMethod = "EXTERNAL_USB_GNSS_REQUIRED";
   bool _hasL5Band = false;
   bool _hasL5BandActive = false;
 
@@ -30,16 +29,21 @@ class EnhancedLocationService {
   List<GnssSatellite> _allSatellites = [];
 
   // State listeners for homescreen
-  final StreamController<bool> _isDetectingController = StreamController<bool>.broadcast();
-  final StreamController<Map<String, dynamic>> _hardwareStateController = StreamController<Map<String, dynamic>>.broadcast();
-  final StreamController<List<GnssSatellite>> _satellitesController = StreamController<List<GnssSatellite>>.broadcast();
-  final StreamController<EnhancedPosition?> _positionController = StreamController<EnhancedPosition?>.broadcast();
+  final StreamController<bool> _isDetectingController =
+      StreamController<bool>.broadcast();
+  final StreamController<Map<String, dynamic>> _hardwareStateController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  final StreamController<List<GnssSatellite>> _satellitesController =
+      StreamController<List<GnssSatellite>>.broadcast();
+  final StreamController<EnhancedPosition?> _positionController =
+      StreamController<EnhancedPosition?>.broadcast();
 
   // Current state for quick access
   EnhancedPosition? _lastPosition;
   bool _isDetecting = false;
 
-  static final EnhancedLocationService _instance = EnhancedLocationService._internal();
+  static final EnhancedLocationService _instance =
+      EnhancedLocationService._internal();
   factory EnhancedLocationService() => _instance;
 
   EnhancedLocationService._internal() {
@@ -50,13 +54,121 @@ class EnhancedLocationService {
   Future<void> initializeService() async {
     print("🚀 Initializing Location Service...");
     try {
+      // Initialize hardware service
+      NavicHardwareService.initialize();
       await NavicHardwareService.isLocationEnabled();
       print("✅ NavicHardwareService initialized");
+
+      // Set up callbacks
+      NavicHardwareService.setLocationUpdateCallback(_handleLocationUpdate);
+      NavicHardwareService.setExternalGnssStatusCallback(
+          _handleExternalGnssStatus);
 
       // Initial hardware check
       await _performHardwareDetection();
     } catch (e) {
       print("❌ Failed to initialize: $e");
+    }
+  }
+
+  /// Handle location updates from Java
+  void _handleLocationUpdate(Map<String, dynamic> data) {
+    try {
+      print('📍 Location update received in Dart: $data');
+
+      // Create enhanced position from Java data
+      final enhancedPosition = EnhancedPosition.create(
+        latitude: data['latitude'] as double? ?? 0.0,
+        longitude: data['longitude'] as double? ?? 0.0,
+        accuracy: data['accuracy'] as double?,
+        altitude: data['altitude'] as double?,
+        speed: data['speed'] as double?,
+        bearing: data['bearing'] as double?,
+        timestamp:
+            data['time'] as int? ?? DateTime.now().millisecondsSinceEpoch,
+        isNavicSupported:
+            data['isNavicSupported'] as bool? ?? _isNavicSupported,
+        isNavicActive: data['isNavicActive'] as bool? ?? _isNavicActive,
+        isNavicEnhanced: (data['isNavicActive'] as bool? ?? false) &&
+            (data['isNavicSupported'] as bool? ?? false),
+        confidenceScore: data['confidenceScore'] as double? ?? 0.5,
+        locationSource:
+            data['locationSource'] as String? ?? 'EXTERNAL_USB_GNSS',
+        detectionReason:
+            data['detectionReason'] as String? ?? 'Using external USB GNSS',
+        navicSatellites:
+            data['navicSatellites'] as int? ?? _navicSatelliteCount,
+        totalSatellites:
+            data['totalSatellites'] as int? ?? _totalSatelliteCount,
+        navicUsedInFix: data['navicUsedInFix'] as int? ?? _navicUsedInFix,
+        hasL5Band: data['hasL5Band'] as bool? ?? _hasL5Band,
+        hasL5BandActive: data['hasL5BandActive'] as bool? ?? _hasL5BandActive,
+        positioningMethod:
+            data['positioningMethod'] as String? ?? 'EXTERNAL_USB_GNSS',
+        systemStats:
+            data['systemStats'] as Map<String, dynamic>? ?? _systemStats,
+        primarySystem: data['primarySystem'] as String? ?? _primarySystem,
+        usingExternalGnss:
+            data['usingExternalGnss'] as bool? ?? _usingExternalGnss,
+        externalGnssInfo:
+            data['externalGnssInfo'] as String? ?? _externalDeviceInfo,
+        externalGnssVendor:
+            data['externalGnssVendor'] as String? ?? _externalGnssVendor,
+        usbConnectionActive:
+            data['usbConnectionActive'] as bool? ?? _usbConnectionActive,
+        message: data['message'] as String? ?? 'Location update from USB GNSS',
+      );
+
+      _lastPosition = enhancedPosition;
+
+      // Broadcast position to UI
+      _positionController.add(enhancedPosition);
+
+      // Update satellite data if available
+      if (data.containsKey('satelliteCount')) {
+        _totalSatelliteCount = data['satelliteCount'] as int? ?? 0;
+      }
+      if (data.containsKey('navicSatellites')) {
+        _navicSatelliteCount = data['navicSatellites'] as int? ?? 0;
+      }
+
+      // Broadcast updated state
+      _broadcastHardwareState("Location updated via USB GNSS");
+    } catch (e) {
+      print('❌ Error handling location update: $e');
+    }
+  }
+
+  /// Handle external GNSS status updates
+  void _handleExternalGnssStatus(Map<String, dynamic> data) {
+    try {
+      print('🔌 External GNSS status update: $data');
+
+      final type = data['type'] as String?;
+
+      switch (type) {
+        case 'EXTERNAL_GNSS_CONNECTED':
+          _usingExternalGnss = true;
+          _externalDeviceInfo = data['deviceInfo'] as String? ?? 'CONNECTED';
+          _hasL5Band = data['hasL5Band'] as bool? ?? false;
+          _hasL5BandActive = data['hasL5BandActive'] as bool? ?? false;
+          _usbConnectionActive = true;
+          _usbConnectionStatus = "CONNECTED";
+          _broadcastHardwareState("USB GNSS connected");
+          break;
+
+        case 'EXTERNAL_GNSS_DISCONNECTED':
+          _usingExternalGnss = false;
+          _usbConnectionActive = false;
+          _usbConnectionStatus = "DISCONNECTED";
+          _externalDeviceInfo = "NONE";
+          _hasL5BandActive = false;
+          _allSatellites.clear();
+          _broadcastHardwareState("USB GNSS disconnected");
+          break;
+      }
+    } catch (e) {
+      print('❌ Error handling external GNSS status: $e');
     }
   }
 
@@ -68,7 +180,15 @@ class EnhancedLocationService {
       // Notify UI that detection is starting
       _setDetectingState(true);
 
-      // Step 1: Check permissions
+      // Step 1: Check if USB GNSS is connected
+      if (!_usingExternalGnss) {
+        print("❌ External USB GNSS not connected");
+        _broadcastHardwareState("Connect USB GNSS device first");
+        _setDetectingState(false);
+        return null;
+      }
+
+      // Step 2: Check permissions
       final hasPermission = await checkLocationPermission();
       if (!hasPermission) {
         print("❌ Location permission denied");
@@ -76,48 +196,55 @@ class EnhancedLocationService {
         return null;
       }
 
-      // Step 2: Perform hardware detection (with UI updates)
+      // Step 3: Perform hardware detection (with UI updates)
       await _performHardwareDetectionWithUpdates();
 
-      // Step 3: Get GPS location
-      print("🎯 Getting GPS location...");
-      _broadcastHardwareState("Acquiring location...");
-      final position = await _getGpsLocation();
-      if (position == null) {
-        print("❌ Failed to get GPS location");
+      // Step 4: Get GPS location via external GNSS
+      print("🎯 Getting location via external USB GNSS...");
+      _broadcastHardwareState("Acquiring location via USB GNSS...");
+
+      // Start location updates
+      final locationResult = await NavicHardwareService.startLocationUpdates();
+      if (locationResult['success'] != true) {
+        print("❌ Failed to start location updates");
         _broadcastHardwareState("Location acquisition failed");
         _setDetectingState(false);
         return null;
       }
 
-      // Step 4: Create enhanced position
-      final enhancedPosition = _createEnhancedPosition(position);
-      _lastPosition = enhancedPosition;
+      // Wait for location update
+      await Future.delayed(Duration(seconds: 2));
 
-      // Broadcast position to UI
-      _positionController.add(enhancedPosition);
+      if (_lastPosition == null) {
+        print("❌ No location received");
+        _broadcastHardwareState("No location data received");
+        _setDetectingState(false);
+        return null;
+      }
 
       // Broadcast satellites to UI
       _satellitesController.add(_allSatellites);
 
       print("\n🎯 ========= LOCATION FLOW COMPLETE ==========");
-      print("✅ Position: ${position.latitude.toStringAsFixed(6)}, ${position.longitude.toStringAsFixed(6)}");
-      print("✅ Accuracy: ${position.accuracy?.toStringAsFixed(2)}m");
+      print(
+          "✅ Position: ${_lastPosition!.latitude.toStringAsFixed(6)}, ${_lastPosition!.longitude.toStringAsFixed(6)}");
+      print("✅ Accuracy: ${_lastPosition!.accuracy?.toStringAsFixed(2)}m");
       print("✅ NavIC Supported: $_isNavicSupported");
       print("✅ NavIC Active: $_isNavicActive");
-      print("✅ Satellites: $_totalSatelliteCount total, $_navicSatelliteCount NavIC");
+      print(
+          "✅ Satellites: $_totalSatelliteCount total, $_navicSatelliteCount NavIC");
       print("✅ L5 Band: $_hasL5Band (Active: $_hasL5BandActive)");
       print("✅ External GNSS: $_usingExternalGnss");
+      print("✅ USB Device: $_externalDeviceInfo");
       print("==========================================\n");
 
       // Broadcast final hardware state
-      _broadcastHardwareState("Location acquired");
+      _broadcastHardwareState("Location acquired via USB GNSS");
 
       // Reset detecting state
       _setDetectingState(false);
 
-      return enhancedPosition;
-
+      return _lastPosition;
     } catch (e) {
       print("❌ Location acquisition failed: $e");
       _broadcastHardwareState("Error: $e");
@@ -129,16 +256,16 @@ class EnhancedLocationService {
   /// Perform hardware detection with UI updates
   Future<void> _performHardwareDetectionWithUpdates() async {
     try {
-      print("🔍 Performing hardware detection...");
-      _broadcastHardwareState("Detecting hardware...");
+      print("🔍 Performing hardware detection via USB GNSS...");
+      _broadcastHardwareState("Detecting USB GNSS hardware...");
 
       final hardwareResult = await NavicHardwareService.checkNavicHardware();
 
       // Update state from Java response
       _isNavicSupported = hardwareResult.isSupported;
       _isNavicActive = hardwareResult.isActive;
-      _navicSatelliteCount = hardwareResult.satelliteCount;
-      _totalSatelliteCount = hardwareResult.totalSatellites;
+      _navicSatelliteCount = hardwareResult.navicSatellites;
+      _totalSatelliteCount = hardwareResult.satelliteCount;
       _navicUsedInFix = hardwareResult.usedInFixCount;
       _detectionMethod = hardwareResult.detectionMethod;
       _hasL5Band = hardwareResult.hasL5Band;
@@ -147,24 +274,35 @@ class EnhancedLocationService {
       _externalDeviceInfo = hardwareResult.externalDeviceInfo;
       _allSatellites = hardwareResult.gnssSatellites;
 
+      // Update chipset info
+      _externalGnssVendor = hardwareResult.chipsetVendor;
+
       // Update system stats
       _updateSystemStats();
 
+      // Update USB connection status
+      if (_usingExternalGnss && _externalDeviceInfo != "NONE") {
+        _usbConnectionActive = true;
+        _usbConnectionStatus = "CONNECTED";
+      } else {
+        _usbConnectionActive = false;
+        _usbConnectionStatus = "DISCONNECTED";
+      }
+
       // Broadcast updated state
-      _broadcastHardwareState("Hardware detection complete");
+      _broadcastHardwareState("USB GNSS hardware detection complete");
 
       print("\n🎯 Hardware Detection Results:");
       print("  ✅ NavIC Supported: $_isNavicSupported");
       print("  📡 NavIC Active: $_isNavicActive");
-      print("  🛰️ NavIC Sats: $_navicSatelliteCount ($_navicUsedInFix in fix)");
+      print(
+          "  🛰️ NavIC Sats: $_navicSatelliteCount ($_navicUsedInFix in fix)");
       print("  📊 Total Sats: $_totalSatelliteCount");
       print("  🔧 Method: $_detectionMethod");
       print("  📡 L5 Band: $_hasL5Band (Active: $_hasL5BandActive)");
       print("  🔌 Using External GNSS: $_usingExternalGnss");
-      if (_usingExternalGnss) {
-        print("  📡 External Device: $_externalDeviceInfo");
-      }
-
+      print("  📡 External Device: $_externalDeviceInfo");
+      print("  🔌 USB Status: $_usbConnectionStatus");
     } catch (e) {
       print("❌ Hardware detection failed: $e");
       _broadcastHardwareState("Hardware detection failed: $e");
@@ -181,6 +319,8 @@ class EnhancedLocationService {
       'hasL5BandActive': _hasL5BandActive,
       'usingExternalGnss': _usingExternalGnss,
       'externalDeviceInfo': _externalDeviceInfo,
+      'externalGnssVendor': _externalGnssVendor,
+      'usbConnectionActive': _usbConnectionActive,
       'usbConnectionStatus': _usbConnectionStatus,
       'navicSatelliteCount': _navicSatelliteCount,
       'totalSatelliteCount': _totalSatelliteCount,
@@ -196,10 +336,15 @@ class EnhancedLocationService {
   /// Get satellite summary for homescreen
   Map<String, dynamic> getSatelliteSummary() {
     final gpsCount = _allSatellites.where((s) => s.system == 'GPS').length;
-    final navicCount = _allSatellites.where((s) => s.system == 'NAVIC' || s.system == 'IRNSS').length;
-    final glonassCount = _allSatellites.where((s) => s.system == 'GLONASS').length;
-    final galileoCount = _allSatellites.where((s) => s.system == 'GALILEO').length;
-    final beidouCount = _allSatellites.where((s) => s.system == 'BEIDOU').length;
+    final navicCount = _allSatellites
+        .where((s) => s.system == 'IRNSS' || s.system == 'NAVIC')
+        .length;
+    final glonassCount =
+        _allSatellites.where((s) => s.system == 'GLONASS').length;
+    final galileoCount =
+        _allSatellites.where((s) => s.system == 'GALILEO').length;
+    final beidouCount =
+        _allSatellites.where((s) => s.system == 'BEIDOU').length;
 
     final inUseCount = _allSatellites.where((s) => s.usedInFix).length;
 
@@ -224,16 +369,21 @@ class EnhancedLocationService {
       final result = await NavicHardwareService.checkUsbGnssDevices();
 
       // Update local state
-      if (result['usingExternalGnss'] != null) {
-        _usingExternalGnss = result['usingExternalGnss'] as bool;
+      if (result['connected'] != null) {
+        _usingExternalGnss = result['connected'] as bool;
       }
       if (result['externalGnssInfo'] != null) {
         _externalDeviceInfo = result['externalGnssInfo'].toString();
       }
-      if (result['availableDevices'] != null) {
-        _usbConnectionStatus = "DEVICES_FOUND";
-      } else {
-        _usbConnectionStatus = "NO_DEVICES";
+
+      // Update connection status
+      if (result['availableDevices'] is List) {
+        final devices = result['availableDevices'] as List;
+        if (devices.isNotEmpty) {
+          _usbConnectionStatus = "DEVICES_FOUND";
+        } else {
+          _usbConnectionStatus = "NO_DEVICES";
+        }
       }
 
       // Broadcast updated state
@@ -246,15 +396,10 @@ class EnhancedLocationService {
         'currentDevice': _externalDeviceInfo,
         'isConnected': _usingExternalGnss,
       };
-
     } catch (e) {
       print("❌ Error checking USB GNSS devices: $e");
       _broadcastHardwareState("USB scan failed: $e");
-      return {
-        'success': false,
-        'message': 'Error: $e',
-        'status': 'ERROR'
-      };
+      return {'success': false, 'message': 'Error: $e', 'status': 'ERROR'};
     }
   }
 
@@ -272,6 +417,9 @@ class EnhancedLocationService {
         _hasL5BandActive = result['hasL5BandActive'] as bool? ?? false;
         _usbConnectionActive = true;
         _usbConnectionStatus = "CONNECTED";
+
+        // Get hardware info after connection
+        await _performHardwareDetection();
 
         print("✅ Connected to USB GNSS: $_externalDeviceInfo");
 
@@ -295,7 +443,6 @@ class EnhancedLocationService {
           'message': result['message'] ?? 'Unknown error',
         };
       }
-
     } catch (e) {
       print("❌ Error connecting to USB GNSS: $e");
       _usbConnectionStatus = "ERROR";
@@ -319,6 +466,11 @@ class EnhancedLocationService {
         _usbConnectionActive = false;
         _usbConnectionStatus = "DISCONNECTED";
         _externalDeviceInfo = "NONE";
+        _hasL5BandActive = false;
+
+        // Reset satellite data
+        _allSatellites.clear();
+        _systemStats.clear();
 
         _broadcastHardwareState("USB GNSS disconnected");
 
@@ -333,7 +485,6 @@ class EnhancedLocationService {
         'status': 'DISCONNECT_FAILED',
         'message': result['message'] ?? 'Unknown error',
       };
-
     } catch (e) {
       print("❌ Error disconnecting USB GNSS: $e");
       return {
@@ -341,6 +492,63 @@ class EnhancedLocationService {
         'status': 'ERROR',
         'message': 'Error: $e',
       };
+    }
+  }
+
+  /// Scan USB GNSS satellites
+  Future<Map<String, dynamic>> scanUsbGnssSatellites() async {
+    try {
+      if (!_usingExternalGnss) {
+        return {'success': false, 'message': 'Connect USB GNSS device first'};
+      }
+
+      _broadcastHardwareState("Scanning USB GNSS satellites...");
+
+      final result = await NavicHardwareService.scanUsbGnssSatellites();
+
+      if (result.containsKey('satellites')) {
+        // Update local satellite data
+        final satellites = result['satellites'] as List<dynamic>;
+        _allSatellites = _convertToSatelliteList(satellites);
+
+        // Update satellite counts
+        _totalSatelliteCount = _allSatellites.length;
+        _navicSatelliteCount = _allSatellites
+            .where((s) => s.system == 'IRNSS' || s.system == 'NAVIC')
+            .length;
+
+        // Broadcast updates
+        _satellitesController.add(_allSatellites);
+        _updateSystemStats();
+
+        _broadcastHardwareState("Satellite scan complete");
+
+        return {
+          'success': true,
+          'satelliteCount': _totalSatelliteCount,
+          'navicCount': _navicSatelliteCount,
+        };
+      }
+
+      return {'success': false, 'message': result['message'] ?? 'Scan failed'};
+    } catch (e) {
+      print("❌ Error scanning USB GNSS satellites: $e");
+      return {'success': false, 'message': 'Error: $e'};
+    }
+  }
+
+  /// Get USB GNSS hardware information
+  Future<Map<String, dynamic>> getUsbGnssHardwareInfo() async {
+    try {
+      if (!_usingExternalGnss) {
+        return {'success': false, 'message': 'Connect USB GNSS device first'};
+      }
+
+      final result = await NavicHardwareService.getUsbGnssHardwareInfo();
+      return result;
+    } catch (e) {
+      print("❌ Error getting USB GNSS hardware info: $e");
+      return {'success': false, 'message': 'Error: $e'};
     }
   }
 
@@ -370,8 +578,10 @@ class EnhancedLocationService {
   /// ============ UI STREAM GETTERS ============
 
   Stream<bool> get isDetectingStream => _isDetectingController.stream;
-  Stream<Map<String, dynamic>> get hardwareStateStream => _hardwareStateController.stream;
-  Stream<List<GnssSatellite>> get satellitesStream => _satellitesController.stream;
+  Stream<Map<String, dynamic>> get hardwareStateStream =>
+      _hardwareStateController.stream;
+  Stream<List<GnssSatellite>> get satellitesStream =>
+      _satellitesController.stream;
   Stream<EnhancedPosition?> get positionStream => _positionController.stream;
 
   /// ============ PRIVATE HELPERS ============
@@ -387,54 +597,15 @@ class EnhancedLocationService {
     _hardwareStateController.add(state);
   }
 
-  /// Check location permission (unchanged)
+  /// Check location permission
   Future<bool> checkLocationPermission() async {
     try {
-      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled && !_usingExternalGnss) {
-        print("⚠️ Location services disabled");
-        return false;
-      }
-
-      LocationPermission permission = await Geolocator.checkPermission();
-
-      if (permission == LocationPermission.deniedForever) {
-        print("❌ Location permission denied forever");
-        return false;
-      }
-
-      if (permission == LocationPermission.denied) {
-        print("📍 Location permission denied, requesting...");
-        permission = await Geolocator.requestPermission();
-      }
-
-      final granted = permission == LocationPermission.whileInUse ||
-          permission == LocationPermission.always;
-
-      print("📍 Permission status: $permission (Granted: $granted)");
-      return granted;
-
+      final permissionResult =
+          await NavicHardwareService.checkLocationPermissions();
+      return permissionResult['allPermissionsGranted'] as bool? ?? false;
     } catch (e) {
       print("❌ Error checking location permission: $e");
       return false;
-    }
-  }
-
-  /// Get GPS location (unchanged)
-  Future<Position?> _getGpsLocation() async {
-    try {
-      Position position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.best,
-        timeLimit: const Duration(seconds: 10),
-      );
-
-      print("✅ GPS position acquired: ${position.latitude}, ${position.longitude}");
-      print("✅ GPS Accuracy: ${position.accuracy?.toStringAsFixed(2) ?? 'unknown'} meters");
-
-      return position;
-    } catch (e) {
-      print("❌ GPS acquisition failed: $e");
-      return null;
     }
   }
 
@@ -447,8 +618,8 @@ class EnhancedLocationService {
       // Update state from Java response
       _isNavicSupported = hardwareResult.isSupported;
       _isNavicActive = hardwareResult.isActive;
-      _navicSatelliteCount = hardwareResult.satelliteCount;
-      _totalSatelliteCount = hardwareResult.totalSatellites;
+      _navicSatelliteCount = hardwareResult.navicSatellites;
+      _totalSatelliteCount = hardwareResult.satelliteCount;
       _navicUsedInFix = hardwareResult.usedInFixCount;
       _detectionMethod = hardwareResult.detectionMethod;
       _hasL5Band = hardwareResult.hasL5Band;
@@ -457,28 +628,35 @@ class EnhancedLocationService {
       _externalDeviceInfo = hardwareResult.externalDeviceInfo;
       _allSatellites = hardwareResult.gnssSatellites;
 
+      // Update chipset info
+      _externalGnssVendor = hardwareResult.chipsetVendor;
+
+      // Update USB connection status
+      if (_usingExternalGnss && _externalDeviceInfo != "NONE") {
+        _usbConnectionActive = true;
+        _usbConnectionStatus = "CONNECTED";
+      }
+
       // Update system stats
       _updateSystemStats();
 
       print("\n🎯 Hardware Detection Results:");
       print("  ✅ NavIC Supported: $_isNavicSupported");
       print("  📡 NavIC Active: $_isNavicActive");
-      print("  🛰️ NavIC Sats: $_navicSatelliteCount ($_navicUsedInFix in fix)");
+      print(
+          "  🛰️ NavIC Sats: $_navicSatelliteCount ($_navicUsedInFix in fix)");
       print("  📊 Total Sats: $_totalSatelliteCount");
       print("  🔧 Method: $_detectionMethod");
       print("  📡 L5 Band: $_hasL5Band (Active: $_hasL5BandActive)");
       print("  🔌 Using External GNSS: $_usingExternalGnss");
-      if (_usingExternalGnss) {
-        print("  📡 External Device: $_externalDeviceInfo");
-      }
-
+      print("  📡 External Device: $_externalDeviceInfo");
     } catch (e) {
       print("❌ Hardware detection failed: $e");
       _resetToDefaultState();
     }
   }
 
-  /// Update system statistics (unchanged)
+  /// Update system statistics
   void _updateSystemStats() {
     final systemCounts = <String, int>{};
 
@@ -498,9 +676,8 @@ class EnhancedLocationService {
 
     // Determine primary system
     if (systemCounts.isNotEmpty) {
-      _primarySystem = systemCounts.entries
-          .reduce((a, b) => a.value > b.value ? a : b)
-          .key;
+      _primarySystem =
+          systemCounts.entries.reduce((a, b) => a.value > b.value ? a : b).key;
     }
   }
 
@@ -524,101 +701,35 @@ class EnhancedLocationService {
     _navicSatelliteCount = 0;
     _totalSatelliteCount = 0;
     _navicUsedInFix = 0;
-    _detectionMethod = "ERROR";
+    _detectionMethod = "EXTERNAL_USB_GNSS_REQUIRED";
     _hasL5Band = false;
     _hasL5BandActive = false;
     _usingExternalGnss = false;
     _externalDeviceInfo = "NONE";
+    _externalGnssVendor = "UNKNOWN";
+    _usbConnectionActive = false;
+    _usbConnectionStatus = "DISCONNECTED";
     _primarySystem = "GPS";
     _systemStats = {};
     _allSatellites = [];
   }
 
-  /// Create enhanced position (unchanged)
-  EnhancedPosition _createEnhancedPosition(Position position) {
-    final isNavicEnhanced = _isNavicSupported && _isNavicActive;
+  /// Convert dynamic list to GnssSatellite list
+  List<GnssSatellite> _convertToSatelliteList(List<dynamic> dynamicList) {
+    final List<GnssSatellite> satellites = [];
 
-    // Determine location source
-    String locationSource;
-    if (_usingExternalGnss) {
-      locationSource = "EXTERNAL_GNSS";
-    } else if (isNavicEnhanced) {
-      locationSource = "NAVIC";
-    } else {
-      locationSource = _primarySystem;
+    for (final item in dynamicList) {
+      if (item is Map<String, dynamic>) {
+        try {
+          final satellite = GnssSatellite.fromMap(item);
+          satellites.add(satellite);
+        } catch (e) {
+          print('⚠️ Error converting satellite: $e');
+        }
+      }
     }
 
-    // Determine chipset info based on mode
-    String chipsetType = _usingExternalGnss ? "EXTERNAL_DEVICE" : "INTERNAL_GNSS";
-    String chipsetVendor = _usingExternalGnss ? _externalGnssVendor : "UNKNOWN";
-    String chipsetModel = _usingExternalGnss ? _externalDeviceInfo : "UNKNOWN";
-
-    // Determine positioning method
-    String positioningMethod = _determinePositioningMethod(isNavicEnhanced);
-
-    // Calculate confidence score (simplified)
-    double confidenceScore = 0.5;
-    if (_hasL5Band && _hasL5BandActive) confidenceScore += 0.2;
-    if (isNavicEnhanced) confidenceScore += 0.15;
-    if (_usingExternalGnss) confidenceScore += 0.2;
-    if (position.accuracy != null && position.accuracy! < 10.0) confidenceScore += 0.15;
-    confidenceScore = confidenceScore.clamp(0.0, 1.0);
-
-    return EnhancedPosition.create(
-      latitude: position.latitude,
-      longitude: position.longitude,
-      accuracy: position.accuracy,
-      altitude: position.altitude,
-      speed: position.speed,
-      bearing: position.heading,
-      timestamp: position.timestamp,
-      isNavicSupported: _isNavicSupported,
-      isNavicActive: _isNavicActive,
-      isNavicEnhanced: isNavicEnhanced,
-      confidenceScore: confidenceScore,
-      locationSource: locationSource,
-      detectionReason: _generateStatusMessage(),
-      navicSatellites: _navicSatelliteCount,
-      totalSatellites: _totalSatelliteCount,
-      navicUsedInFix: _navicUsedInFix,
-      hasL5Band: _hasL5Band,
-      hasL5BandActive: _hasL5BandActive,
-      positioningMethod: positioningMethod,
-      systemStats: _systemStats,
-      primarySystem: _primarySystem,
-      usingExternalGnss: _usingExternalGnss,
-      externalGnssInfo: _externalDeviceInfo,
-      externalGnssVendor: chipsetVendor,
-      usbConnectionActive: _usbConnectionActive,
-      message: _generateStatusMessage(),
-    );
-  }
-
-  String _determinePositioningMethod(bool isNavicEnhanced) {
-    if (_usingExternalGnss) {
-      return _hasL5BandActive ? "EXTERNAL_GNSS_L5" : "EXTERNAL_GNSS";
-    } else if (isNavicEnhanced && _navicUsedInFix >= 4) {
-      return _hasL5BandActive ? "NAVIC_PRIMARY_L5" : "NAVIC_PRIMARY";
-    } else if (isNavicEnhanced && _navicUsedInFix >= 2) {
-      return "NAVIC_HYBRID";
-    } else if (isNavicEnhanced && _navicUsedInFix >= 1) {
-      return "NAVIC_ASSISTED";
-    } else {
-      return "GPS_PRIMARY";
-    }
-  }
-
-  String _generateStatusMessage() {
-    if (_usingExternalGnss) {
-      return "Using external USB GNSS: $_externalDeviceInfo";
-    }
-    if (_isNavicSupported && _isNavicActive) {
-      return "NavIC positioning available. L5 Band: ${_hasL5BandActive ? 'Active' : 'Inactive'}.";
-    } else if (_hasL5Band) {
-      return "L5 band support available. Using $_primarySystem positioning.";
-    } else {
-      return "Using $_primarySystem positioning.";
-    }
+    return satellites;
   }
 
   void dispose() {
@@ -627,5 +738,8 @@ class EnhancedLocationService {
     _hardwareStateController.close();
     _satellitesController.close();
     _positionController.close();
+
+    // Clean up hardware service
+    NavicHardwareService.dispose();
   }
 }

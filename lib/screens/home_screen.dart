@@ -5,9 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:navic_ss/models/satellite_data_model.dart';
+import 'package:navic_ss/models/enhanced_position.dart';
 import 'package:navic_ss/services/location_service.dart';
-//import 'package:navic_ss/screens/emergency.dart';
 import 'package:navic_ss/models/gnss_satellite.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -78,7 +77,8 @@ class _HomeScreenState extends State<HomeScreen> {
       userAgentPackageName: 'com.example.navic',
     ),
     'ESRI Satellite View': TileLayer(
-      urlTemplate: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      urlTemplate:
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
       userAgentPackageName: 'com.example.navic',
     ),
   };
@@ -115,8 +115,19 @@ class _HomeScreenState extends State<HomeScreen> {
         final status = _locationService.getHardwareStatus();
         _updateFromHardwareStatus(status);
 
-        // Use the location service workflow
-        await _acquireInitialLocationWithNavICFlow();
+        // Check USB connection first before trying to get location
+        await _checkUsbDevices();
+
+        if (_usingExternalGnss) {
+          // Use the location service workflow with USB GNSS
+          await _acquireInitialLocationWithNavICFlow();
+        } else {
+          // Show USB connection required message
+          setState(() {
+            _hardwareMessage = "Connect USB GNSS device to begin";
+            _hardwareStatus = "USB Required";
+          });
+        }
       } else {
         print("⚠️ No location permission granted");
         _showPermissionDeniedDialog();
@@ -132,29 +143,32 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _setupStreamListeners() {
     // Listening for detecting state changes
-    _detectingSubscription = _locationService.isDetectingStream.listen((isDetecting) {
-      if (mounted) {
-        setState(() {
-          _isLoading = isDetecting;
+    _detectingSubscription =
+        _locationService.isDetectingStream.listen((isDetecting) {
+          if (mounted) {
+            setState(() {
+              _isLoading = isDetecting;
+            });
+          }
         });
-      }
-    });
 
     // Listening for hardware state updates
-    _hardwareStateSubscription = _locationService.hardwareStateStream.listen((state) {
-      if (mounted) {
-        _updateFromHardwareStatus(state);
-      }
-    });
+    _hardwareStateSubscription =
+        _locationService.hardwareStateStream.listen((state) {
+          if (mounted) {
+            _updateFromHardwareStatus(state);
+          }
+        });
 
     // Listening for satellite updates
-    _satellitesSubscription = _locationService.satellitesStream.listen((satellites) {
-      if (mounted) {
-        setState(() {
-          _allSatellites = satellites;
+    _satellitesSubscription =
+        _locationService.satellitesStream.listen((satellites) {
+          if (mounted) {
+            setState(() {
+              _allSatellites = satellites;
+            });
+          }
         });
-      }
-    });
 
     // Listening for position updates
     _positionSubscription = _locationService.positionStream.listen((position) {
@@ -178,10 +192,18 @@ class _HomeScreenState extends State<HomeScreen> {
         return;
       }
 
-      // Use the new location service method
+      // Check if USB GNSS is connected
+      if (!_usingExternalGnss) {
+        print("❌ External USB GNSS not connected");
+        _showUsbRequiredDialog();
+        return;
+      }
+
+      // Use the location service method
       final position = await _locationService.getLocationWithNavICFlow();
 
-      if (position != null && _isValidCoordinate(position.latitude, position.longitude)) {
+      if (position != null &&
+          _isValidCoordinate(position.latitude, position.longitude)) {
         print("✅ Location acquired successfully using NavIC flow");
 
         // Update state from the position
@@ -197,11 +219,11 @@ class _HomeScreenState extends State<HomeScreen> {
         _updateFromHardwareStatus(status);
       } else {
         print("❌ Location acquisition failed");
-        await _tryFallbackLocationAcquisition();
+        _showUsbRequiredDialog();
       }
     } on TimeoutException catch (e) {
       print("⏰ Location acquisition timeout: $e");
-      await _tryFallbackLocationAcquisition();
+      _showUsbRequiredDialog();
     } catch (e) {
       print("❌ Error in location acquisition: $e");
 
@@ -232,10 +254,19 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       }
 
+      // Check if USB GNSS is connected
+      if (!_usingExternalGnss) {
+        print("❌ External USB GNSS not connected");
+        _showUsbRequiredDialog();
+        setState(() => _isLoading = false);
+        return;
+      }
+
       // Use the NavIC flow
       final position = await _locationService.getLocationWithNavICFlow();
 
-      if (position != null && _isValidCoordinate(position.latitude, position.longitude)) {
+      if (position != null &&
+          _isValidCoordinate(position.latitude, position.longitude)) {
         // Update state from position
         _isUsingNavic = position.isNavicEnhanced;
         _acquisitionFlow = _isUsingNavic ? "NAVIC" : "GPS";
@@ -251,13 +282,15 @@ class _HomeScreenState extends State<HomeScreen> {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(_isUsingNavic ?
-            "Location refreshed using NavIC" :
-            "Location refreshed using ${position.locationSource}"),
+            content: Text(_isUsingNavic
+                ? "Location refreshed using NavIC"
+                : "Location refreshed using ${position.locationSource}"),
             backgroundColor: _isUsingNavic ? Colors.green : Colors.blue,
             duration: const Duration(seconds: 2),
           ),
         );
+      } else {
+        _showUsbRequiredDialog();
       }
     } catch (e) {
       print("❌ Error refreshing location: $e");
@@ -282,7 +315,8 @@ class _HomeScreenState extends State<HomeScreen> {
       _hasL5BandActive = status['hasL5BandActive'] ?? false;
       _usingExternalGnss = status['usingExternalGnss'] ?? false;
       _externalDeviceInfo = status['externalDeviceInfo']?.toString() ?? "NONE";
-      _usbConnectionStatus = status['usbConnectionStatus']?.toString() ?? "DISCONNECTED";
+      _usbConnectionStatus =
+          status['usbConnectionStatus']?.toString() ?? "DISCONNECTED";
       _navicSatelliteCount = status['navicSatelliteCount'] ?? 0;
       _totalSatelliteCount = status['totalSatelliteCount'] ?? 0;
       _navicUsedInFix = status['navicUsedInFix'] ?? 0;
@@ -298,9 +332,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
       // Determine positioning method based on current state
       if (_usingExternalGnss) {
-        _positioningMethod = _hasL5BandActive ? "EXTERNAL_GNSS_L5" : "EXTERNAL_GNSS";
+        _positioningMethod =
+        _hasL5BandActive ? "EXTERNAL_GNSS_L5" : "EXTERNAL_GNSS";
       } else if (_isNavicActive && _navicUsedInFix >= 4) {
-        _positioningMethod = _hasL5BandActive ? "NAVIC_PRIMARY_L5" : "NAVIC_PRIMARY";
+        _positioningMethod =
+        _hasL5BandActive ? "NAVIC_PRIMARY_L5" : "NAVIC_PRIMARY";
       } else if (_isNavicActive && _navicUsedInFix >= 2) {
         _positioningMethod = "NAVIC_HYBRID";
       } else if (_isNavicActive && _navicUsedInFix >= 1) {
@@ -394,6 +430,46 @@ class _HomeScreenState extends State<HomeScreen> {
         _isCheckingPermission = false;
       });
     }
+  }
+
+  Future<void> _showUsbRequiredDialog() async {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (BuildContext context) {
+          return AlertDialog(
+            title: const Text('USB GNSS Required'),
+            content: const Text(
+              'External USB GNSS device is required for this app to work properly. '
+                  'Please connect a USB GNSS device and try again.',
+            ),
+            actions: <Widget>[
+              TextButton(
+                child: const Text('Cancel'),
+                onPressed: () {
+                  Navigator.of(context).pop();
+                },
+              ),
+              TextButton(
+                child: const Text('Check USB Devices'),
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  _checkUsbDevices();
+                },
+              ),
+              TextButton(
+                child: const Text('Connect USB'),
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  _connectToUsbGnss();
+                },
+              ),
+            ],
+          );
+        },
+      );
+    });
   }
 
   Future<void> _showEnableLocationDialog() async {
@@ -508,102 +584,16 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  Future<void> _tryFallbackLocationAcquisition() async {
-    try {
-      print("🔄 Trying fallback location acquisition...");
-
-      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        print("❌ Location services are disabled");
-        return;
-      }
-
-      print("📍 Trying with lower accuracy...");
-      final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.medium,
-        timeLimit: const Duration(seconds: 10),
-      ).timeout(const Duration(seconds: 10));
-
-      if (_isValidCoordinate(position.latitude, position.longitude)) {
-        print("✅ Fallback location acquired");
-
-        // Get satellite summary from service
-        final satelliteSummary = _locationService.getSatelliteSummary();
-
-        // Create enhanced position
-        final enhancedPosition = EnhancedPosition.create(
-          latitude: position.latitude,
-          longitude: position.longitude,
-          accuracy: position.accuracy,
-          altitude: position.altitude,
-          speed: position.speed,
-          bearing: position.heading,
-          timestamp: position.timestamp,
-          isNavicSupported: _isNavicSupported,
-          isNavicActive: _isNavicActive,
-          isNavicEnhanced: false,
-          confidenceScore: 0.7,
-          locationSource: "GPS",
-          detectionReason: "Fallback GPS positioning",
-          navicSatellites: 0,
-          totalSatellites: satelliteSummary['total'] ?? 0,
-          navicUsedInFix: 0,
-          hasL5Band: false,
-          hasL5BandActive: false,
-          positioningMethod: "GPS_FALLBACK",
-          systemStats: _systemStats,
-          primarySystem: "GPS",
-          usingExternalGnss: false,
-          externalGnssInfo: "NONE",
-          externalGnssVendor: "Unknown",
-          usbConnectionActive: false,
-          message: "Fallback GPS positioning",
-        );
-
-        _updateLocationState(enhancedPosition);
-        _centerMapOnPosition(enhancedPosition);
-
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("Using GPS for positioning"),
-            backgroundColor: Colors.orange,
-            duration: Duration(seconds: 3),
-          ),
-        );
-      }
-    } on TimeoutException {
-      print("⏰ Fallback location acquisition timeout");
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Location acquisition timed out"),
-          backgroundColor: Colors.red,
-          duration: Duration(seconds: 3),
-        ),
-      );
-    } catch (e) {
-      print("❌ Fallback location acquisition failed: $e");
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text("Location unavailable: ${e.toString()}"),
-          backgroundColor: Colors.red,
-          duration: const Duration(seconds: 3),
-        ),
-      );
-    }
-  }
-
   void _updateHardwareMessage() {
     final bool hasNavicBands = _hasL5Band && _hasL5BandActive;
 
     if (_usingExternalGnss) {
-      _hardwareMessage = "Using external USB GNSS device. ${_chipsetVendor} $_chipsetModel";
+      _hardwareMessage =
+      "Using external USB GNSS device. ${_chipsetVendor} $_chipsetModel";
       _hardwareStatus = "USB GNSS";
     } else if (!_isNavicSupported && !hasNavicBands) {
-      _hardwareMessage = "Device does not have L5 band active. Using $_primarySystem.";
-      _hardwareStatus = "Limited Hardware";
+      _hardwareMessage = "Connect USB GNSS device to begin";
+      _hardwareStatus = "USB Required";
     } else if (_isNavicSupported && _isNavicActive && hasNavicBands) {
       _hardwareMessage = "NavIC positioning active with L5 band!";
       _hardwareStatus = "NavIC Active";
@@ -611,11 +601,12 @@ class _HomeScreenState extends State<HomeScreen> {
       _hardwareMessage = "L5 band active. Enhanced positioning available.";
       _hardwareStatus = "L5 Active";
     } else if (_hasL5Band) {
-      _hardwareMessage = "L5 band supported. $_primarySystem positioning available.";
+      _hardwareMessage =
+      "L5 band supported. $_primarySystem positioning available.";
       _hardwareStatus = "$_primarySystem with L5";
     } else {
-      _hardwareMessage = "Using $_primarySystem positioning.";
-      _hardwareStatus = "$_primarySystem Only";
+      _hardwareMessage = "Connect USB GNSS device";
+      _hardwareStatus = "USB Required";
     }
   }
 
@@ -648,28 +639,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _acquisitionFlow = _isUsingNavic ? "NAVIC" : _primarySystem;
 
       _systemStats = position.systemStats;
-
-      // Get current band info from satellites
-      _updateBandInfoFromSatellites();
     });
-  }
-
-  void _updateBandInfoFromSatellites() {
-    // Extract band information from satellites
-    final activeBands = <String>{};
-    for (final sat in _allSatellites) {
-      if (sat.usedInFix) {
-        // Add band based on constellation and frequency
-        if (sat.carrierFrequencyHz != null) {
-          final freq = sat.carrierFrequencyHz!;
-          if (freq >= 1575.42e6 && freq <= 1575.42e6) {
-            activeBands.add('L1');
-          } else if (freq >= 1176.45e6 && freq <= 1176.45e6) {
-            activeBands.add('L5');
-          }
-        }
-      }
-    }
   }
 
   void _centerMapOnPosition(EnhancedPosition position) {
@@ -685,10 +655,12 @@ class _HomeScreenState extends State<HomeScreen> {
     print("🎯 Accuracy: ${position.accuracy?.toStringAsFixed(2)} meters");
     print("🛰️ Source: ${position.locationSource}");
     print("🎯 Primary System: $_primarySystem");
-    print("💪 Confidence: ${(position.confidenceScore * 100).toStringAsFixed(1)}%");
+    print(
+        "💪 Confidence: ${(position.confidenceScore * 100).toStringAsFixed(1)}%");
     print("🔌 Using External GNSS: $_usingExternalGnss");
     print("🏭 Chipset: $_chipsetVendor $_chipsetModel");
-    print("📡 NavIC Satellites: $_navicSatelliteCount ($_navicUsedInFix in fix)");
+    print(
+        "📡 NavIC Satellites: $_navicSatelliteCount ($_navicUsedInFix in fix)");
     print("📶 L5 Band: ${_hasL5Band ? 'Available' : 'Not Available'}");
     print("🎯 Positioning Method: $_positioningMethod");
     print("🛰️ Total Satellites: $_totalSatelliteCount");
@@ -707,7 +679,8 @@ class _HomeScreenState extends State<HomeScreen> {
       _locationSource = _primarySystem;
     }
 
-    print("📍 Location Source Updated: $_locationSource (Using NavIC: $_isUsingNavic, USB: $_usingExternalGnss)");
+    print(
+        "📍 Location Source Updated: $_locationSource (Using NavIC: $_isUsingNavic, USB: $_usingExternalGnss)");
   }
 
   void _updateLocationQuality(EnhancedPosition pos) {
@@ -719,25 +692,24 @@ class _HomeScreenState extends State<HomeScreen> {
     final String systemName = _locationSource;
 
     if (pos.accuracy != null && pos.accuracy! < 1.0) {
-      _locationQuality = isUsingNavic ?
-      "${bandInfo}NavIC Excellent" :
-      "${bandInfo}$systemName Excellent";
+      _locationQuality = isUsingNavic
+          ? "${bandInfo}NavIC Excellent"
+          : "${bandInfo}$systemName Excellent";
     } else if (pos.accuracy != null && pos.accuracy! < 2.0) {
-      _locationQuality = isUsingNavic ?
-      "${bandInfo}NavIC High" :
-      "${bandInfo}$systemName High";
+      _locationQuality = isUsingNavic
+          ? "${bandInfo}NavIC High"
+          : "${bandInfo}$systemName High";
     } else if (pos.accuracy != null && pos.accuracy! < 5.0) {
-      _locationQuality = isUsingNavic ?
-      "${bandInfo}NavIC Good" :
-      "${bandInfo}$systemName Good";
+      _locationQuality = isUsingNavic
+          ? "${bandInfo}NavIC Good"
+          : "${bandInfo}$systemName Good";
     } else if (pos.accuracy != null && pos.accuracy! < 10.0) {
-      _locationQuality = isUsingNavic ?
-      "${bandInfo}NavIC Basic" :
-      "${bandInfo}$systemName Basic";
+      _locationQuality = isUsingNavic
+          ? "${bandInfo}NavIC Basic"
+          : "${bandInfo}$systemName Basic";
     } else {
-      _locationQuality = isUsingNavic ?
-      "${bandInfo}NavIC Low" :
-      "${bandInfo}$systemName Low";
+      _locationQuality =
+      isUsingNavic ? "${bandInfo}NavIC Low" : "${bandInfo}$systemName Low";
     }
   }
 
@@ -784,19 +756,27 @@ class _HomeScreenState extends State<HomeScreen> {
   String _mapSystemToDisplayName(String system) {
     switch (system.toUpperCase()) {
       case 'IRNSS':
-      case 'NAVIC': return "NavIC";
-      case 'GPS': return "GPS";
+      case 'NAVIC':
+        return "NavIC";
+      case 'GPS':
+        return "GPS";
       case 'GLO':
-      case 'GLONASS': return "GLONASS";
+      case 'GLONASS':
+        return "GLONASS";
       case 'GAL':
-      case 'GALILEO': return "Galileo";
+      case 'GALILEO':
+        return "Galileo";
       case 'BDS':
-      case 'BEIDOU': return "BeiDou";
+      case 'BEIDOU':
+        return "BeiDou";
       case 'QZS':
-      case 'QZSS': return "QZSS";
+      case 'QZSS':
+        return "QZSS";
       case 'SBS':
-      case 'SBAS': return "SBAS";
-      default: return system;
+      case 'SBAS':
+        return "SBAS";
+      default:
+        return system;
     }
   }
 
@@ -811,18 +791,71 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() {
         if (result['success'] == true) {
           _usbConnectionStatus = result['status']?.toString() ?? "SCANNED";
-          _hardwareMessage = "Found ${result['availableDevices']?.length ?? 0} USB device(s)";
+          final deviceCount = result['availableDevices']?.length ?? 0;
+          _hardwareMessage = "Found $deviceCount USB device(s)";
+
+          if (deviceCount > 0) {
+            // Show dialog to connect to available devices
+            _showUsbDeviceSelectionDialog(result['availableDevices']);
+          }
         } else {
           _hardwareMessage = "USB scan failed: ${result['message']}";
         }
       });
-
     } catch (e) {
       print("❌ Error checking USB devices: $e");
       setState(() {
         _hardwareMessage = "USB scan failed: $e";
       });
     }
+  }
+
+  void _showUsbDeviceSelectionDialog(List<dynamic> devices) {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Available USB Devices'),
+          content: SizedBox(
+            width: double.maxFinite,
+            height: 200,
+            child: ListView.builder(
+              itemCount: devices.length,
+              itemBuilder: (context, index) {
+                final device = devices[index];
+                return ListTile(
+                  leading: const Icon(Icons.usb),
+                  title: Text(
+                      device['deviceName']?.toString() ?? 'Unknown Device'),
+                  subtitle: Text(
+                      'Vendor: ${device['vendorId']}, Product: ${device['productId']}'),
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    _connectToUsbGnss();
+                  },
+                );
+              },
+            ),
+          ),
+          actions: <Widget>[
+            TextButton(
+              child: const Text('Cancel'),
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+            ),
+            TextButton(
+              child: const Text('Connect'),
+              onPressed: () {
+                Navigator.of(context).pop();
+                _connectToUsbGnss();
+              },
+            ),
+          ],
+        );
+      },
+    );
   }
 
   Future<void> _connectToUsbGnss() async {
@@ -838,11 +871,15 @@ class _HomeScreenState extends State<HomeScreen> {
           _hardwareMessage = "Connected to ${result['deviceInfo']}";
           _usingExternalGnss = true;
           _externalDeviceInfo = result['deviceInfo']?.toString() ?? "CONNECTED";
+
+          // Try to get location after successful connection
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _acquireInitialLocationWithNavICFlow();
+          });
         } else {
           _hardwareMessage = "Connection failed: ${result['message']}";
         }
       });
-
     } catch (e) {
       print("❌ Error connecting to USB GNSS: $e");
       setState(() {
@@ -860,21 +897,26 @@ class _HomeScreenState extends State<HomeScreen> {
           _hardwareMessage = "USB GNSS disconnected";
           _usingExternalGnss = false;
           _externalDeviceInfo = "NONE";
+          _currentPosition = null;
+          _locationAcquired = false;
         } else {
           _hardwareMessage = "Disconnect failed: ${result['message']}";
         }
       });
-
     } catch (e) {
       print("❌ Error disconnecting USB GNSS: $e");
     }
   }
 
-  void _toggleLayerSelection() => setState(() => _showLayerSelection = !_showLayerSelection);
-  void _toggleSatelliteList() => setState(() => _showSatelliteList = !_showSatelliteList);
+  void _toggleLayerSelection() =>
+      setState(() => _showLayerSelection = !_showLayerSelection);
+  void _toggleSatelliteList() =>
+      setState(() => _showSatelliteList = !_showSatelliteList);
   void _toggleBandPanel() => setState(() => _showBandPanel = !_showBandPanel);
-  void _toggleLayer(String layerName) => setState(() => _selectedLayers[layerName] = !_selectedLayers[layerName]!);
-  void _toggleBottomPanel() => setState(() => _isBottomPanelVisible = !_isBottomPanelVisible);
+  void _toggleLayer(String layerName) =>
+      setState(() => _selectedLayers[layerName] = !_selectedLayers[layerName]!);
+  void _toggleBottomPanel() =>
+      setState(() => _isBottomPanelVisible = !_isBottomPanelVisible);
 
   Color _getQualityColor() {
     if (_locationQuality.contains("Excellent")) return Colors.green;
@@ -890,12 +932,13 @@ class _HomeScreenState extends State<HomeScreen> {
 
   LatLng _getMapCenter() {
     if (_currentPosition != null &&
-        _isValidCoordinate(_currentPosition!.latitude, _currentPosition!.longitude)) {
+        _isValidCoordinate(
+            _currentPosition!.latitude, _currentPosition!.longitude)) {
       return LatLng(_currentPosition!.latitude, _currentPosition!.longitude);
     } else if (_lastValidMapCenter != null) {
       return _lastValidMapCenter!;
     } else {
-      return  LatLng(28.6139, 77.2090);
+      return const LatLng(28.6139, 77.2090); // Delhi, India
     }
   }
 
@@ -947,9 +990,12 @@ class _HomeScreenState extends State<HomeScreen> {
     final accuracy = _currentPosition?.accuracy ?? 10.0;
 
     Color primaryColor;
-    if (isL5) primaryColor = Colors.green;
-    else if (isUsb) primaryColor = Colors.teal;
-    else primaryColor = isNavic ? Colors.green : _getSystemColor(_primarySystem);
+    if (isL5)
+      primaryColor = Colors.green;
+    else if (isUsb)
+      primaryColor = Colors.teal;
+    else
+      primaryColor = isNavic ? Colors.green : _getSystemColor(_primarySystem);
 
     return Stack(
       alignment: Alignment.center,
@@ -959,9 +1005,9 @@ class _HomeScreenState extends State<HomeScreen> {
           height: (accuracy * 3.0).clamp(40.0, 250.0),
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            color: primaryColor.withOpacity(0.15),
+            color: primaryColor.withValues(alpha: 0.15),
             border: Border.all(
-              color: primaryColor.withOpacity(0.4),
+              color: primaryColor.withValues(alpha: 0.4),
               width: isL5 ? 2.0 : 1.5,
             ),
           ),
@@ -971,9 +1017,9 @@ class _HomeScreenState extends State<HomeScreen> {
           height: 60,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            color: primaryColor.withOpacity(0.25),
+            color: primaryColor.withValues(alpha: 0.25),
             border: Border.all(
-              color: primaryColor.withOpacity(0.6),
+              color: primaryColor.withValues(alpha: 0.6),
               width: isL5 ? 2.5 : 2.0,
             ),
           ),
@@ -983,9 +1029,9 @@ class _HomeScreenState extends State<HomeScreen> {
           height: 40,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            color: primaryColor.withOpacity(0.4),
+            color: primaryColor.withValues(alpha: 0.4),
             border: Border.all(
-              color: primaryColor.withOpacity(0.8),
+              color: primaryColor.withValues(alpha: 0.8),
               width: isL5 ? 3.0 : 2.0,
             ),
           ),
@@ -1057,7 +1103,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildSatelliteListPanel() {
     final satelliteSummary = _locationService.getSatelliteSummary();
-    final satelliteList = satelliteSummary['list'] as List<dynamic>? ?? [];
+    final satelliteList =
+        _allSatellites; // Use the actual satellite list from stream
 
     return Container(
       width: MediaQuery.of(context).size.width * 0.9,
@@ -1067,7 +1114,7 @@ class _HomeScreenState extends State<HomeScreen> {
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.2),
+            color: Colors.black.withValues(alpha: 0.2),
             blurRadius: 12,
             offset: const Offset(0, 4),
           ),
@@ -1082,7 +1129,8 @@ class _HomeScreenState extends State<HomeScreen> {
             children: [
               Row(
                 children: [
-                  Icon(Icons.satellite_alt, color: Colors.purple.shade700, size: 20),
+                  Icon(Icons.satellite_alt,
+                      color: Colors.purple.shade700, size: 20),
                   const SizedBox(width: 8),
                   Text(
                     "SATELLITE VIEW",
@@ -1115,9 +1163,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ],
           ),
-
           const SizedBox(height: 12),
-
           if (satelliteList.isNotEmpty)
             SizedBox(
               height: 300,
@@ -1126,38 +1172,80 @@ class _HomeScreenState extends State<HomeScreen> {
                 physics: const BouncingScrollPhysics(),
                 itemCount: satelliteList.length,
                 itemBuilder: (context, index) {
-                  final satData = satelliteList[index];
-                  // You would need to convert this back to GnssSatellite
-                  // For now, display as text
-                  return _buildSatelliteListItem(satData);
+                  final sat = satelliteList[index];
+                  return _buildSatelliteListItem(sat);
                 },
               ),
             )
           else
             _buildNoSatellitesView(),
-
           const SizedBox(height: 12),
-
-          if (_primarySystem.isNotEmpty)
-            _buildPrimarySystemInfo(),
+          if (_primarySystem.isNotEmpty) _buildPrimarySystemInfo(),
         ],
       ),
     );
   }
 
-  Widget _buildSatelliteListItem(dynamic satData) {
-    // This is a simplified version - you'll need to parse the satellite data properly
+  Widget _buildSatelliteListItem(GnssSatellite sat) {
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.grey.shade50,
+        color: sat.usedInFix ? Colors.green.shade50 : Colors.grey.shade50,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey.shade200),
+        border: Border.all(
+            color:
+            sat.usedInFix ? Colors.green.shade200 : Colors.grey.shade200),
       ),
-      child: Text(
-        satData.toString(),
-        style: const TextStyle(fontSize: 12),
+      child: Row(
+        children: [
+          Icon(
+            sat.system == 'IRNSS' || sat.system == 'NAVIC'
+                ? Icons.satellite_alt
+                : Icons.satellite,
+            color: _getSystemColor(sat.system),
+            size: 20,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  "${sat.system} ${sat.svid}",
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey.shade800,
+                  ),
+                ),
+                Text(
+                  "SNR: ${sat.cn0DbHz.toStringAsFixed(1)} dB",
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.grey.shade600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: sat.usedInFix
+                  ? Colors.green.withValues(alpha: 0.2)
+                  : Colors.grey.withValues(alpha: 0.2),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              sat.usedInFix ? "In Use" : "Available",
+              style: TextStyle(
+                fontSize: 10,
+                color: sat.usedInFix ? Colors.green : Colors.grey,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1171,7 +1259,7 @@ class _HomeScreenState extends State<HomeScreen> {
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.2),
+            color: Colors.black.withValues(alpha: 0.2),
             blurRadius: 12,
             offset: const Offset(0, 4),
           ),
@@ -1186,7 +1274,8 @@ class _HomeScreenState extends State<HomeScreen> {
             children: [
               Row(
                 children: [
-                  Icon(Icons.settings_input_antenna, color: Colors.green.shade700, size: 20),
+                  Icon(Icons.settings_input_antenna,
+                      color: Colors.green.shade700, size: 20),
                   const SizedBox(width: 8),
                   Text(
                     "BAND INFORMATION",
@@ -1206,9 +1295,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ],
           ),
-
           const SizedBox(height: 12),
-
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
@@ -1221,7 +1308,8 @@ class _HomeScreenState extends State<HomeScreen> {
               children: [
                 Row(
                   children: [
-                    Icon(Icons.wifi_tethering, color: Colors.green.shade700, size: 18),
+                    Icon(Icons.wifi_tethering,
+                        color: Colors.green.shade700, size: 18),
                     const SizedBox(width: 8),
                     Text(
                       "BAND STATUS",
@@ -1238,9 +1326,19 @@ class _HomeScreenState extends State<HomeScreen> {
                   children: [
                     _buildBandStatusChip("L5", _hasL5Band, _hasL5BandActive),
                     const SizedBox(width: 8),
-                    _buildBandStatusChip("USB", _usingExternalGnss, _usingExternalGnss),
+                    _buildBandStatusChip("USB", true, _usingExternalGnss),
                   ],
                 ),
+                if (_usingExternalGnss) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    _externalDeviceInfo,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.green.shade700,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -1253,9 +1351,14 @@ class _HomeScreenState extends State<HomeScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
-        color: supported ? (active ? Colors.green.shade100 : Colors.blue.shade100) : Colors.grey.shade100,
+        color: supported
+            ? (active ? Colors.green.shade100 : Colors.blue.shade100)
+            : Colors.grey.shade100,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: supported ? (active ? Colors.green.shade300 : Colors.blue.shade300) : Colors.grey.shade300),
+        border: Border.all(
+            color: supported
+                ? (active ? Colors.green.shade300 : Colors.blue.shade300)
+                : Colors.grey.shade300),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -1263,14 +1366,18 @@ class _HomeScreenState extends State<HomeScreen> {
           Icon(
             Icons.circle,
             size: 10,
-            color: supported ? (active ? Colors.green.shade700 : Colors.blue.shade700) : Colors.grey.shade700,
+            color: supported
+                ? (active ? Colors.green.shade700 : Colors.blue.shade700)
+                : Colors.grey.shade700,
           ),
           const SizedBox(width: 6),
           Text(
             "$band ${active ? '(Active)' : supported ? '(Available)' : '(Unavailable)'}",
             style: TextStyle(
               fontWeight: FontWeight.bold,
-              color: supported ? (active ? Colors.green.shade800 : Colors.blue.shade800) : Colors.grey.shade800,
+              color: supported
+                  ? (active ? Colors.green.shade800 : Colors.blue.shade800)
+                  : Colors.grey.shade800,
             ),
           ),
         ],
@@ -1290,7 +1397,9 @@ class _HomeScreenState extends State<HomeScreen> {
           Icon(Icons.satellite, size: 48, color: Colors.grey.shade400),
           const SizedBox(height: 12),
           Text(
-            "No satellites detected",
+            _usingExternalGnss
+                ? "No satellites detected"
+                : "Connect USB GNSS device",
             style: TextStyle(
               color: Colors.grey.shade600,
               fontSize: 16,
@@ -1299,7 +1408,9 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           const SizedBox(height: 8),
           Text(
-            "Make sure you're outdoors with clear sky view",
+            _usingExternalGnss
+                ? "Make sure you're outdoors with clear sky view"
+                : "Connect a USB GNSS device to begin satellite tracking",
             style: TextStyle(
               color: Colors.grey.shade500,
               fontSize: 12,
@@ -1308,9 +1419,9 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           const SizedBox(height: 12),
           ElevatedButton.icon(
-            onPressed: _refreshLocation,
-            icon: const Icon(Icons.refresh),
-            label: const Text("Refresh"),
+            onPressed: _usingExternalGnss ? _refreshLocation : _checkUsbDevices,
+            icon: Icon(_usingExternalGnss ? Icons.refresh : Icons.usb),
+            label: Text(_usingExternalGnss ? "Refresh" : "Check USB Devices"),
           ),
         ],
       ),
@@ -1324,9 +1435,9 @@ class _HomeScreenState extends State<HomeScreen> {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: primaryColor.withOpacity(0.1),
+        color: primaryColor.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: primaryColor.withOpacity(0.3)),
+        border: Border.all(color: primaryColor.withValues(alpha: 0.3)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1334,7 +1445,9 @@ class _HomeScreenState extends State<HomeScreen> {
           Row(
             children: [
               Icon(
-                isNavicPrimary ? Icons.satellite_alt : _getSystemIcon(_primarySystem),
+                isNavicPrimary
+                    ? Icons.satellite_alt
+                    : _getSystemIcon(_primarySystem),
                 color: primaryColor,
                 size: 18,
               ),
@@ -1364,9 +1477,10 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               if (_hasL5Band && _hasL5BandActive)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding:
+                  const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
-                    color: Colors.green.withOpacity(0.1),
+                    color: Colors.green.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(6),
                   ),
                   child: Row(
@@ -1386,9 +1500,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
             ],
           ),
-
           const SizedBox(height: 8),
-
           if (_chipsetVendor != "Unknown" && _chipsetModel != "Unknown")
             Row(
               children: [
@@ -1408,7 +1520,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ],
             ),
-
           if (_usingExternalGnss)
             Row(
               children: [
@@ -1427,9 +1538,10 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  padding:
+                  const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
-                    color: Colors.green.withOpacity(0.1),
+                    color: Colors.green.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: Text(
@@ -1451,29 +1563,45 @@ class _HomeScreenState extends State<HomeScreen> {
   IconData _getSystemIcon(String system) {
     switch (system.toUpperCase()) {
       case 'NAVIC':
-      case 'IRNSS': return Icons.satellite_alt;
-      case 'GPS': return Icons.gps_fixed;
-      case 'GLONASS': return Icons.satellite;
-      case 'GALILEO': return Icons.satellite;
+      case 'IRNSS':
+        return Icons.satellite_alt;
+      case 'GPS':
+        return Icons.gps_fixed;
+      case 'GLONASS':
+        return Icons.satellite;
+      case 'GALILEO':
+        return Icons.satellite;
       case 'BEIDOU':
-      case 'BDS': return Icons.satellite;
-      case 'QZSS': return Icons.satellite;
-      case 'SBAS': return Icons.satellite;
-      default: return Icons.gps_fixed;
+      case 'BDS':
+        return Icons.satellite;
+      case 'QZSS':
+        return Icons.satellite;
+      case 'SBAS':
+        return Icons.satellite;
+      default:
+        return Icons.gps_fixed;
     }
   }
 
   Color _getSystemColor(String system) {
     switch (system.toUpperCase()) {
       case 'IRNSS':
-      case 'NAVIC': return Colors.green;
-      case 'GPS': return Colors.blue;
-      case 'GLONASS': return Colors.red;
-      case 'GALILEO': return Colors.purple;
-      case 'BEIDOU': return Colors.orange;
-      case 'QZSS': return Colors.pink;
-      case 'SBAS': return Colors.teal;
-      default: return Colors.grey;
+      case 'NAVIC':
+        return Colors.green;
+      case 'GPS':
+        return Colors.blue;
+      case 'GLONASS':
+        return Colors.red;
+      case 'GALILEO':
+        return Colors.purple;
+      case 'BEIDOU':
+        return Colors.orange;
+      case 'QZSS':
+        return Colors.pink;
+      case 'SBAS':
+        return Colors.teal;
+      default:
+        return Colors.grey;
     }
   }
 
@@ -1488,24 +1616,14 @@ class _HomeScreenState extends State<HomeScreen> {
         appBarSubtitle += " • $_chipsetVendor $_chipsetModel";
       }
     } else {
-      // Add NavIC support status
-      if (_isNavicSupported && _isNavicActive) {
-        appBarSubtitle += "NavIC Active";
-      } else if (_isNavicSupported) {
-        appBarSubtitle += "NavIC Supported";
-      }
-
-      // Add L5 band info
-      if (_hasL5BandActive) {
-        appBarSubtitle += appBarSubtitle.isNotEmpty ? " • L5 Active" : "L5 Active";
-      } else if (_hasL5Band) {
-        appBarSubtitle += appBarSubtitle.isNotEmpty ? " • L5 Available" : "L5 Available";
-      }
+      appBarSubtitle = "Connect USB GNSS Device";
     }
 
-    // Add current location source
-    final displaySystem = _isUsingNavic ? 'NavIC' : _primarySystem;
-    appBarSubtitle += appBarSubtitle.isNotEmpty ? " • Using $displaySystem" : "Using $displaySystem";
+    // Add current location source if available
+    if (_currentPosition != null) {
+      final displaySystem = _isUsingNavic ? 'NavIC' : _primarySystem;
+      appBarSubtitle += " • Using $displaySystem";
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -1537,7 +1655,9 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
           ],
         ),
-        backgroundColor: _isUsingNavic ? Colors.green.shade700 : _getSystemColor(_primarySystem).withOpacity(0.8),
+        backgroundColor: _isUsingNavic
+            ? Colors.green.shade700
+            : _getSystemColor(_primarySystem).withValues(alpha: 0.8),
         elevation: 2,
         actions: [
           IconButton(
@@ -1561,7 +1681,9 @@ class _HomeScreenState extends State<HomeScreen> {
             tooltip: 'Band Information',
           ),
           IconButton(
-            icon: Icon(_isBottomPanelVisible ? Icons.visibility_off : Icons.visibility),
+            icon: Icon(_isBottomPanelVisible
+                ? Icons.visibility_off
+                : Icons.visibility),
             onPressed: _toggleBottomPanel,
             tooltip: _isBottomPanelVisible ? 'Hide Panel' : 'Show Panel',
           ),
@@ -1573,7 +1695,6 @@ class _HomeScreenState extends State<HomeScreen> {
             onPressed: _checkUsbDevices,
             tooltip: _usingExternalGnss ? 'USB Connected' : 'Check USB',
           ),
-
         ],
       ),
       body: Stack(
@@ -1582,11 +1703,22 @@ class _HomeScreenState extends State<HomeScreen> {
           if (_isLoading) _buildLoadingOverlay(),
           if (_isBottomPanelVisible)
             Positioned(bottom: 0, left: 0, right: 0, child: _buildInfoPanel()),
-          if (_showLayerSelection) Positioned(top: 80, right: 16, child: _buildLayerSelectionPanel()),
-          if (_showSatelliteList) Positioned(top: 80, left: 16, right: 16, child: _buildSatelliteListPanel()),
-          if (_showBandPanel) Positioned(top: 80, left: 16, right: 16, child: _buildBandPanel()),
+          if (_showLayerSelection)
+            Positioned(top: 80, right: 16, child: _buildLayerSelectionPanel()),
+          if (_showSatelliteList)
+            Positioned(
+                top: 80,
+                left: 16,
+                right: 16,
+                child: _buildSatelliteListPanel()),
+          if (_showBandPanel)
+            Positioned(top: 80, left: 16, right: 16, child: _buildBandPanel()),
           if (_isHardwareChecked && !_isLoading)
-            Positioned(top: 16, left: 16, right: 16, child: _buildHardwareSupportBanner()),
+            Positioned(
+                top: 16,
+                left: 16,
+                right: 16,
+                child: _buildHardwareSupportBanner()),
         ],
       ),
       floatingActionButton: Row(
@@ -1616,21 +1748,35 @@ class _HomeScreenState extends State<HomeScreen> {
             onPressed: _toggleBottomPanel,
             backgroundColor: Colors.blue,
             child: Icon(
-              _isBottomPanelVisible ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_up,
+              _isBottomPanelVisible
+                  ? Icons.keyboard_arrow_down
+                  : Icons.keyboard_arrow_up,
               color: Colors.white,
             ),
             tooltip: _isBottomPanelVisible ? 'Hide Panel' : 'Show Panel',
           ),
           const SizedBox(width: 8),
-          if (_currentPosition != null)
+          if (_usingExternalGnss && _currentPosition != null)
             FloatingActionButton(
               onPressed: _refreshLocation,
-              backgroundColor: _isUsingNavic ? Colors.green : _getSystemColor(_primarySystem),
+              backgroundColor: _isUsingNavic
+                  ? Colors.green
+                  : _getSystemColor(_primarySystem),
               child: Icon(
-                _isUsingNavic ? Icons.satellite_alt : _getSystemIcon(_primarySystem),
+                _isUsingNavic
+                    ? Icons.satellite_alt
+                    : _getSystemIcon(_primarySystem),
                 color: Colors.white,
               ),
-              tooltip: _isUsingNavic ? 'NavIC Location' : '$_primarySystem Location',
+              tooltip:
+              _isUsingNavic ? 'NavIC Location' : '$_primarySystem Location',
+            ),
+          if (!_usingExternalGnss)
+            FloatingActionButton(
+              onPressed: _checkUsbDevices,
+              backgroundColor: Colors.orange,
+              child: const Icon(Icons.usb, color: Colors.white),
+              tooltip: 'Connect USB GNSS',
             ),
           if (_usingExternalGnss)
             FloatingActionButton.small(
@@ -1648,20 +1794,22 @@ class _HomeScreenState extends State<HomeScreen> {
     final displaySystem = _isUsingNavic ? 'NavIC' : _primarySystem;
 
     return Container(
-      color: Colors.black.withOpacity(0.4),
+      color: Colors.black.withValues(alpha: 0.4),
       child: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             CircularProgressIndicator(
-              valueColor: AlwaysStoppedAnimation<Color>(
-                  _isUsingNavic ? Colors.green : _getSystemColor(_primarySystem)
-              ),
+              valueColor: AlwaysStoppedAnimation<Color>(_isUsingNavic
+                  ? Colors.green
+                  : _getSystemColor(_primarySystem)),
               strokeWidth: 3,
             ),
             const SizedBox(height: 20),
             Text(
-              "Acquiring Location...",
+              _usingExternalGnss
+                  ? "Acquiring Location..."
+                  : "Connecting to USB GNSS...",
               style: TextStyle(
                 color: Colors.white,
                 fontSize: 16,
@@ -1670,9 +1818,11 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             const SizedBox(height: 8),
             Text(
-              _isUsingNavic ?
-              "Using NavIC positioning" :
-              "Using $_primarySystem positioning",
+              _isUsingNavic
+                  ? "Using NavIC positioning"
+                  : _usingExternalGnss
+                  ? "Using $_primarySystem positioning"
+                  : "Please wait...",
               style: TextStyle(
                 color: Colors.white70,
                 fontSize: 14,
@@ -1693,7 +1843,7 @@ class _HomeScreenState extends State<HomeScreen> {
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.2),
+            color: Colors.black.withValues(alpha: 0.2),
             blurRadius: 12,
             offset: const Offset(0, 4),
           ),
@@ -1712,7 +1862,8 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
           const SizedBox(height: 12),
-          ..._selectedLayers.keys.map((name) => Padding(
+          ..._selectedLayers.keys
+              .map((name) => Padding(
             padding: const EdgeInsets.only(bottom: 8),
             child: Material(
               color: Colors.transparent,
@@ -1746,7 +1897,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
             ),
-          )).toList(),
+          ))
+              .toList(),
         ],
       ),
     );
@@ -1768,7 +1920,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.15),
+            color: Colors.black.withValues(alpha: 0.15),
             blurRadius: 20,
             offset: const Offset(0, -4),
           ),
@@ -1823,7 +1975,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.15),
+            color: Colors.black.withValues(alpha: 0.15),
             blurRadius: 20,
             offset: const Offset(0, -4),
           ),
@@ -1833,13 +1985,25 @@ class _HomeScreenState extends State<HomeScreen> {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Icon(
-            _isUsingNavic ? Icons.satellite_alt : _getSystemIcon(_primarySystem),
-            color: _isUsingNavic ? Colors.green.shade400 : _getSystemColor(_primarySystem).withOpacity(0.7),
+            _usingExternalGnss
+                ? (_isUsingNavic
+                ? Icons.satellite_alt
+                : _getSystemIcon(_primarySystem))
+                : Icons.usb,
+            color: _usingExternalGnss
+                ? (_isUsingNavic
+                ? Colors.green.shade400
+                : _getSystemColor(_primarySystem).withValues(alpha: 0.7))
+                : Colors.orange.shade400,
             size: 48,
           ),
           const SizedBox(height: 12),
           Text(
-            _isUsingNavic ? "Getting NavIC Location" : "Getting $_primarySystem Location",
+            _usingExternalGnss
+                ? (_isUsingNavic
+                ? "Getting NavIC Location"
+                : "Getting $_primarySystem Location")
+                : "Connect USB GNSS Device",
             style: TextStyle(
               color: Colors.grey.shade600,
               fontSize: 18,
@@ -1848,14 +2012,23 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           const SizedBox(height: 4),
           Text(
-            _isUsingNavic ?
-            "Using NavIC with ${_hasL5BandActive ? 'L5 band active' : 'enhanced positioning'}" :
-            "Using $_primarySystem for positioning",
+            _usingExternalGnss
+                ? (_isUsingNavic
+                ? "Using NavIC with ${_hasL5BandActive ? 'L5 band active' : 'enhanced positioning'}"
+                : "Using $_primarySystem for positioning")
+                : "External USB GNSS required for location",
             style: TextStyle(
               color: Colors.grey.shade500,
               fontSize: 14,
             ),
           ),
+          if (!_usingExternalGnss) const SizedBox(height: 12),
+          if (!_usingExternalGnss)
+            ElevatedButton.icon(
+              onPressed: _checkUsbDevices,
+              icon: const Icon(Icons.usb),
+              label: const Text("Check USB Devices"),
+            ),
         ],
       ),
     );
@@ -1871,15 +2044,15 @@ class _HomeScreenState extends State<HomeScreen> {
     String systemText;
 
     if (isUsb) {
-      backgroundColor = Colors.teal.withOpacity(0.15);
+      backgroundColor = Colors.teal.withValues(alpha: 0.15);
       iconColor = Colors.teal;
       systemText = "USB GNSS POSITIONING";
     } else if (isNavic) {
-      backgroundColor = Colors.green.withOpacity(0.15);
+      backgroundColor = Colors.green.withValues(alpha: 0.15);
       iconColor = Colors.green;
       systemText = "NAVIC POSITIONING";
     } else {
-      backgroundColor = _getSystemColor(_primarySystem).withOpacity(0.15);
+      backgroundColor = _getSystemColor(_primarySystem).withValues(alpha: 0.15);
       iconColor = _getSystemColor(_primarySystem);
       systemText = "$_primarySystem POSITIONING";
     }
@@ -1889,7 +2062,7 @@ class _HomeScreenState extends State<HomeScreen> {
       decoration: BoxDecoration(
         color: backgroundColor,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: iconColor.withOpacity(0.3)),
+        border: Border.all(color: iconColor.withValues(alpha: 0.3)),
       ),
       child: Row(
         children: [
@@ -1900,7 +2073,11 @@ class _HomeScreenState extends State<HomeScreen> {
               shape: BoxShape.circle,
             ),
             child: Icon(
-              isUsb ? Icons.usb : (isNavic ? Icons.satellite_alt : _getSystemIcon(_primarySystem)),
+              isUsb
+                  ? Icons.usb
+                  : (isNavic
+                  ? Icons.satellite_alt
+                  : _getSystemIcon(_primarySystem)),
               color: Colors.white,
               size: 20,
             ),
@@ -1917,15 +2094,16 @@ class _HomeScreenState extends State<HomeScreen> {
                       style: TextStyle(
                         fontWeight: FontWeight.w700,
                         fontSize: 10,
-                        color: iconColor.withOpacity(0.9),
+                        color: iconColor.withValues(alpha: 0.9),
                       ),
                     ),
                     if (_hasL5BandActive) ...[
                       const SizedBox(width: 6),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
                         decoration: BoxDecoration(
-                          color: Colors.green.withOpacity(0.2),
+                          color: Colors.green.withValues(alpha: 0.2),
                           borderRadius: BorderRadius.circular(4),
                         ),
                         child: Text(
@@ -1945,17 +2123,18 @@ class _HomeScreenState extends State<HomeScreen> {
                   _locationQuality,
                   style: TextStyle(
                     fontSize: 12,
-                    color: iconColor.withOpacity(0.8),
+                    color: iconColor.withValues(alpha: 0.8),
                     fontWeight: FontWeight.w500,
                   ),
                 ),
-                if (_chipsetVendor != "Unknown" && _chipsetModel != "Unknown") ...[
+                if (_chipsetVendor != "Unknown" &&
+                    _chipsetModel != "Unknown") ...[
                   const SizedBox(height: 2),
                   Text(
                     "$_chipsetVendor $_chipsetModel",
                     style: TextStyle(
                       fontSize: 10,
-                      color: iconColor.withOpacity(0.7),
+                      color: iconColor.withValues(alpha: 0.7),
                     ),
                   ),
                 ],
@@ -1965,7 +2144,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     _externalDeviceInfo,
                     style: TextStyle(
                       fontSize: 10,
-                      color: iconColor.withOpacity(0.7),
+                      color: iconColor.withValues(alpha: 0.7),
                     ),
                   ),
                 ],
@@ -1986,7 +2165,7 @@ class _HomeScreenState extends State<HomeScreen> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
-              color: _getQualityColor().withOpacity(0.2),
+              color: _getQualityColor().withValues(alpha: 0.2),
               borderRadius: BorderRadius.circular(12),
             ),
             child: Text(
@@ -2026,8 +2205,12 @@ class _HomeScreenState extends State<HomeScreen> {
                 icon: Icons.explore,
                 title: "LATITUDE",
                 value: pos.latitude.toStringAsFixed(6),
-                color: _isUsingNavic ? Colors.green.shade50 : _getSystemColor(_primarySystem).withOpacity(0.1),
-                iconColor: _isUsingNavic ? Colors.green.shade700 : _getSystemColor(_primarySystem),
+                color: _isUsingNavic
+                    ? Colors.green.shade50
+                    : _getSystemColor(_primarySystem).withValues(alpha: 0.1),
+                iconColor: _isUsingNavic
+                    ? Colors.green.shade700
+                    : _getSystemColor(_primarySystem),
               ),
             ),
             const SizedBox(width: 12),
@@ -2036,8 +2219,12 @@ class _HomeScreenState extends State<HomeScreen> {
                 icon: Icons.explore_outlined,
                 title: "LONGITUDE",
                 value: pos.longitude.toStringAsFixed(6),
-                color: _isUsingNavic ? Colors.green.shade50 : _getSystemColor(_primarySystem).withOpacity(0.1),
-                iconColor: _isUsingNavic ? Colors.green.shade700 : _getSystemColor(_primarySystem),
+                color: _isUsingNavic
+                    ? Colors.green.shade50
+                    : _getSystemColor(_primarySystem).withValues(alpha: 0.1),
+                iconColor: _isUsingNavic
+                    ? Colors.green.shade700
+                    : _getSystemColor(_primarySystem),
               ),
             ),
           ],
@@ -2069,8 +2256,12 @@ class _HomeScreenState extends State<HomeScreen> {
                 icon: Icons.location_on_sharp,
                 title: "ACCURACY",
                 value: "${pos.accuracy?.toStringAsFixed(1) ?? 'N/A'} meters",
-                color: _isUsingNavic ? Colors.green.shade50 : Colors.orange.shade50,
-                iconColor: _isUsingNavic ? Colors.green.shade700 : Colors.orange.shade700,
+                color: _isUsingNavic
+                    ? Colors.green.shade50
+                    : Colors.orange.shade50,
+                iconColor: _isUsingNavic
+                    ? Colors.green.shade700
+                    : Colors.orange.shade700,
               ),
             ),
           ],
@@ -2100,7 +2291,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 icon: Icons.settings_input_antenna,
                 title: "ACTIVE BAND",
                 value: _hasL5BandActive ? "L5" : "L1",
-                color: _hasL5BandActive ? Colors.green.withOpacity(0.1) : Colors.orange.withOpacity(0.1),
+                color: _hasL5BandActive
+                    ? Colors.green.withValues(alpha: 0.1)
+                    : Colors.orange.withValues(alpha: 0.1),
                 iconColor: _hasL5BandActive ? Colors.green : Colors.orange,
               ),
             ),
@@ -2110,8 +2303,12 @@ class _HomeScreenState extends State<HomeScreen> {
                 icon: Icons.usb,
                 title: "USB STATUS",
                 value: _usingExternalGnss ? "Connected" : "Disconnected",
-                color: _usingExternalGnss ? Colors.green.shade50 : Colors.grey.shade50,
-                iconColor: _usingExternalGnss ? Colors.green.shade700 : Colors.grey.shade700,
+                color: _usingExternalGnss
+                    ? Colors.green.shade50
+                    : Colors.grey.shade50,
+                iconColor: _usingExternalGnss
+                    ? Colors.green.shade700
+                    : Colors.grey.shade700,
               ),
             ),
           ],
@@ -2138,7 +2335,8 @@ class _HomeScreenState extends State<HomeScreen> {
             children: [
               Row(
                 children: [
-                  Icon(Icons.satellite, color: Colors.purple.shade600, size: 18),
+                  Icon(Icons.satellite,
+                      color: Colors.purple.shade600, size: 18),
                   const SizedBox(width: 8),
                   Text(
                     "GNSS RANGE",
@@ -2152,9 +2350,10 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               if (_isUsingNavic)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding:
+                  const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
-                    color: Colors.green.withOpacity(0.1),
+                    color: Colors.green.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Row(
@@ -2174,9 +2373,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               if (_usingExternalGnss)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding:
+                  const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
-                    color: Colors.teal.withOpacity(0.1),
+                    color: Colors.teal.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Row(
@@ -2197,40 +2397,53 @@ class _HomeScreenState extends State<HomeScreen> {
             ],
           ),
           const SizedBox(height: 12),
-
           Row(
             children: [
-              _buildSatelliteStat("Total Sats", "${satelliteSummary['total'] ?? 0}", Colors.blue),
+              _buildSatelliteStat("Total Sats",
+                  "${satelliteSummary['total'] ?? 0}", Colors.blue),
               const SizedBox(width: 12),
-              _buildSatelliteStat("NavIC", "${satelliteSummary['navic'] ?? 0}", Colors.green),
+              _buildSatelliteStat(
+                  "NavIC", "${satelliteSummary['navic'] ?? 0}", Colors.green),
               const SizedBox(width: 12),
-              _buildSatelliteStat("GPS", "${satelliteSummary['gps'] ?? 0}", Colors.blue),
+              _buildSatelliteStat(
+                  "GPS", "${satelliteSummary['gps'] ?? 0}", Colors.blue),
             ],
           ),
           const SizedBox(height: 8),
-
           Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
-              color: _isUsingNavic ? Colors.green.withOpacity(0.1) : _getSystemColor(_primarySystem).withOpacity(0.1),
+              color: _isUsingNavic
+                  ? Colors.green.withValues(alpha: 0.1)
+                  : _getSystemColor(_primarySystem).withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(8),
               border: Border.all(
-                color: _isUsingNavic ? Colors.green.withOpacity(0.3) : _getSystemColor(_primarySystem).withOpacity(0.3),
+                color: _isUsingNavic
+                    ? Colors.green.withValues(alpha: 0.3)
+                    : _getSystemColor(_primarySystem).withValues(alpha: 0.3),
               ),
             ),
             child: Row(
               children: [
                 Icon(
-                  _isUsingNavic ? Icons.satellite_alt : _getSystemIcon(_primarySystem),
+                  _isUsingNavic
+                      ? Icons.satellite_alt
+                      : _getSystemIcon(_primarySystem),
                   size: 16,
-                  color: _isUsingNavic ? Colors.green : _getSystemColor(_primarySystem),
+                  color: _isUsingNavic
+                      ? Colors.green
+                      : _getSystemColor(_primarySystem),
                 ),
                 const SizedBox(width: 8),
                 Text(
-                  _isUsingNavic ? "Using NavIC Positioning" : "Using $_primarySystem Positioning",
+                  _isUsingNavic
+                      ? "Using NavIC Positioning"
+                      : "Using $_primarySystem Positioning",
                   style: TextStyle(
                     fontSize: 12,
-                    color: _isUsingNavic ? Colors.green : _getSystemColor(_primarySystem),
+                    color: _isUsingNavic
+                        ? Colors.green
+                        : _getSystemColor(_primarySystem),
                     fontWeight: FontWeight.w600,
                   ),
                 ),
@@ -2251,7 +2464,12 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildInfoCard({required IconData icon, required String title, required String value, required Color color, required Color iconColor}) {
+  Widget _buildInfoCard(
+      {required IconData icon,
+        required String title,
+        required String value,
+        required Color color,
+        required Color iconColor}) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -2259,7 +2477,7 @@ class _HomeScreenState extends State<HomeScreen> {
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.1),
+            color: Colors.black.withValues(alpha: 0.1),
             blurRadius: 8,
             offset: const Offset(0, 2),
           ),
@@ -2270,7 +2488,7 @@ class _HomeScreenState extends State<HomeScreen> {
           Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
-              color: iconColor.withOpacity(0.1),
+              color: iconColor.withValues(alpha: 0.1),
               shape: BoxShape.circle,
             ),
             child: Icon(icon, color: iconColor, size: 20),
@@ -2310,7 +2528,7 @@ class _HomeScreenState extends State<HomeScreen> {
       child: Container(
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: color.withOpacity(0.1),
+          color: color.withValues(alpha: 0.1),
           borderRadius: BorderRadius.circular(8),
         ),
         child: Column(
@@ -2372,8 +2590,8 @@ class _HomeScreenState extends State<HomeScreen> {
     } else {
       bannerColor = Colors.orange.shade50;
       bannerIconColor = Colors.orange;
-      bannerIcon = Icons.warning;
-      bannerStatus = "$_primarySystem Only";
+      bannerIcon = Icons.usb;
+      bannerStatus = "USB GNSS Required";
     }
 
     return Container(
@@ -2381,10 +2599,10 @@ class _HomeScreenState extends State<HomeScreen> {
       decoration: BoxDecoration(
         color: bannerColor,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: bannerIconColor.withOpacity(0.3)),
+        border: Border.all(color: bannerIconColor.withValues(alpha: 0.3)),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.1),
+            color: Colors.black.withValues(alpha: 0.1),
             blurRadius: 8,
             offset: const Offset(0, 2),
           ),
@@ -2421,11 +2639,15 @@ class _HomeScreenState extends State<HomeScreen> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             decoration: BoxDecoration(
-              color: bannerIconColor.withOpacity(0.2),
+              color: bannerIconColor.withValues(alpha: 0.2),
               borderRadius: BorderRadius.circular(8),
             ),
             child: Text(
-              _hasL5BandActive ? "L5 Active" : _usingExternalGnss ? "USB" : "Standard",
+              _hasL5BandActive
+                  ? "L5 Active"
+                  : _usingExternalGnss
+                  ? "USB"
+                  : "Connect",
               style: TextStyle(
                 color: bannerIconColor,
                 fontSize: 10,
@@ -2438,7 +2660,7 @@ class _HomeScreenState extends State<HomeScreen> {
               margin: const EdgeInsets.only(left: 8),
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               decoration: BoxDecoration(
-                color: Colors.green.withOpacity(0.2),
+                color: Colors.green.withValues(alpha: 0.2),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Text(
@@ -2455,7 +2677,7 @@ class _HomeScreenState extends State<HomeScreen> {
               margin: const EdgeInsets.only(left: 8),
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               decoration: BoxDecoration(
-                color: Colors.teal.withOpacity(0.2),
+                color: Colors.teal.withValues(alpha: 0.2),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Row(
