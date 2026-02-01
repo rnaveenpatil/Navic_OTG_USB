@@ -24,7 +24,7 @@ class _HomeScreenState extends State<HomeScreen>
 
   // Method channel
   static const MethodChannel _channel =
-      MethodChannel('com.example.usb_connect_gnss/usb');
+  MethodChannel('com.example.usb_connect_gnss/usb');
 
   // USB Connection State
   String _usbDeviceName = "";
@@ -88,10 +88,26 @@ class _HomeScreenState extends State<HomeScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
 
-    _tabController = TabController(length: 4, vsync: this); // Changed to 4 tabs
+    _tabController = TabController(length: 4, vsync: this);
     _setupMethodChannel();
     _scanUsbDevices();
     _startConnectionMonitoring();
+
+    // Initialize with last known position if available
+    _initializeWithLastPosition();
+  }
+
+  void _initializeWithLastPosition() async {
+    // Try to get last known position from provider or local storage
+    final provider = Provider.of<GNSSProvider>(context, listen: false);
+    if (provider.data.latitude != null && provider.data.longitude != null) {
+      setState(() {
+        _latitude = provider.data.latitude;
+        _longitude = provider.data.longitude;
+        _locationAcquired = true;
+        _lastValidMapCenter = LatLng(_latitude!, _longitude!);
+      });
+    }
   }
 
   @override
@@ -106,10 +122,10 @@ class _HomeScreenState extends State<HomeScreen>
   void _startConnectionMonitoring() {
     _connectionMonitorTimer =
         Timer.periodic(const Duration(seconds: 2), (timer) {
-      if (_usingUsbGnss) {
-        _checkConnectionStability();
-      }
-    });
+          if (_usingUsbGnss) {
+            _checkConnectionStability();
+          }
+        });
 
     _keepAliveTimer = Timer.periodic(const Duration(seconds: 5), (timer) async {
       if (_usingUsbGnss && _usbDeviceName.isNotEmpty) {
@@ -166,7 +182,7 @@ class _HomeScreenState extends State<HomeScreen>
   void _reconnectDevice() async {
     try {
       final device = _availableUsbDevices.firstWhere(
-        (d) => d['deviceName'] == _usbDeviceName,
+            (d) => d['deviceName'] == _usbDeviceName,
         orElse: () => {},
       );
 
@@ -193,6 +209,12 @@ class _HomeScreenState extends State<HomeScreen>
             _connectionRetries = 0;
             _usbConnectionStatus = "RECONNECTED";
           });
+
+          // Reinitialize GNSS data stream
+          final provider = Provider.of<GNSSProvider>(context, listen: false);
+          if (provider.isConnected) {
+            await provider.startDataStream();
+          }
         }
       }
     } catch (e) {
@@ -203,9 +225,9 @@ class _HomeScreenState extends State<HomeScreen>
   int? _getCurrentVendorId() {
     if (_availableUsbDevices.isEmpty || _usbDeviceName.isEmpty) return null;
     final device = _availableUsbDevices.firstWhere(
-      (d) => d['deviceName'] == _usbDeviceName,
+          (d) => d['deviceName'] == _usbDeviceName,
       orElse: () =>
-          _availableUsbDevices.isNotEmpty ? _availableUsbDevices[0] : {},
+      _availableUsbDevices.isNotEmpty ? _availableUsbDevices[0] : {},
     );
     return device['vendorId'] as int?;
   }
@@ -213,9 +235,9 @@ class _HomeScreenState extends State<HomeScreen>
   int? _getCurrentProductId() {
     if (_availableUsbDevices.isEmpty || _usbDeviceName.isEmpty) return null;
     final device = _availableUsbDevices.firstWhere(
-      (d) => d['deviceName'] == _usbDeviceName,
+          (d) => d['deviceName'] == _usbDeviceName,
       orElse: () =>
-          _availableUsbDevices.isNotEmpty ? _availableUsbDevices[0] : {},
+      _availableUsbDevices.isNotEmpty ? _availableUsbDevices[0] : {},
     );
     return device['productId'] as int?;
   }
@@ -284,7 +306,7 @@ class _HomeScreenState extends State<HomeScreen>
       final result = await _channel.invokeMethod('getUsbDevices');
       if (result != null) {
         final Map<String, dynamic> devicesMap =
-            Map<String, dynamic>.from(result);
+        Map<String, dynamic>.from(result);
 
         setState(() {
           _availableUsbDevices = devicesMap.entries.map((entry) {
@@ -304,9 +326,9 @@ class _HomeScreenState extends State<HomeScreen>
               'supportsIrnss': deviceInfo['supportsIrnss'] ?? false,
               'supportsMultiGnss': deviceInfo['supportsMultiGnss'] ?? false,
               'vendorHex':
-                  '0x${(deviceInfo['vendorId'] as int).toRadixString(16).padLeft(4, '0').toUpperCase()}',
+              '0x${(deviceInfo['vendorId'] as int).toRadixString(16).padLeft(4, '0').toUpperCase()}',
               'productHex':
-                  '0x${(deviceInfo['productId'] as int).toRadixString(16).padLeft(4, '0').toUpperCase()}',
+              '0x${(deviceInfo['productId'] as int).toRadixString(16).padLeft(4, '0').toUpperCase()}',
             };
           }).toList();
 
@@ -472,9 +494,9 @@ class _HomeScreenState extends State<HomeScreen>
       });
 
       final device = _availableUsbDevices.firstWhere(
-        (d) => d['deviceName'] == _usbDeviceName,
+            (d) => d['deviceName'] == _usbDeviceName,
         orElse: () =>
-            _availableUsbDevices.isNotEmpty ? _availableUsbDevices[0] : {},
+        _availableUsbDevices.isNotEmpty ? _availableUsbDevices[0] : {},
       );
 
       final connectionInfo = await _channel.invokeMethod(
@@ -510,16 +532,32 @@ class _HomeScreenState extends State<HomeScreen>
           ),
         );
 
+        // FIX: Initialize GNSS provider with proper connection
         final provider = Provider.of<GNSSProvider>(context, listen: false);
+
+        // Check if provider needs to be initialized
         if (!provider.isConnected) {
+          // Initialize the GNSS provider with USB connection
           await provider.connectToDevice();
         }
+
+        // Start data streaming immediately
+        await provider.startDataStream();
+
+        // Force an initial data update
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            _updateFromGNSSData(provider.data);
+            _updateUsbStatus(provider);
+          }
+        });
       }
     } catch (e) {
       setState(() {
         _isLoading = false;
         _usbConnectionStatus = "OPEN FAILED";
       });
+      print('Error opening USB device: $e');
     }
   }
 
@@ -537,7 +575,7 @@ class _HomeScreenState extends State<HomeScreen>
 
       if (_usbDeviceName.isNotEmpty) {
         final device = _availableUsbDevices.firstWhere(
-          (d) => d['deviceName'] == _usbDeviceName,
+              (d) => d['deviceName'] == _usbDeviceName,
           orElse: () => {},
         );
 
@@ -576,86 +614,86 @@ class _HomeScreenState extends State<HomeScreen>
         child: _isLoading
             ? const Center(child: CircularProgressIndicator())
             : _availableUsbDevices.isEmpty
-                ? const Center(child: Text('No USB devices found'))
-                : Column(
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 12),
-                        child: Row(
-                          children: [
-                            const Icon(Icons.usb, size: 16, color: Colors.blue),
-                            const SizedBox(width: 8),
+            ? const Center(child: Text('No USB devices found'))
+            : Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Row(
+                children: [
+                  const Icon(Icons.usb, size: 16, color: Colors.blue),
+                  const SizedBox(width: 8),
+                  Text(
+                    '${_availableUsbDevices.length} devices',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    icon: const Icon(Icons.refresh),
+                    onPressed: _scanUsbDevices,
+                    iconSize: 20,
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: ListView.builder(
+                itemCount: _availableUsbDevices.length,
+                itemBuilder: (context, index) {
+                  final device = _availableUsbDevices[index];
+                  final hasPermission =
+                  device['hasPermission'] as bool;
+                  final isRealHardware =
+                  device['isRealHardware'] as bool;
+
+                  return Card(
+                    margin: const EdgeInsets.symmetric(vertical: 4),
+                    color: hasPermission
+                        ? Colors.green.shade50
+                        : Colors.grey.shade50,
+                    child: ListTile(
+                      leading: Icon(
+                        hasPermission
+                            ? Icons.check_circle
+                            : Icons.lock_outline,
+                        color: hasPermission
+                            ? Colors.green
+                            : Colors.orange,
+                      ),
+                      title: Text(
+                          device['productName'] ?? 'Unknown Device'),
+                      subtitle: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'VID: ${device['vendorHex']} PID: ${device['productHex']}',
+                            style: const TextStyle(fontSize: 11),
+                          ),
+                          if (device['gnssType'] != 'Unknown') ...[
+                            const SizedBox(height: 4),
                             Text(
-                              '${_availableUsbDevices.length} devices',
-                              style: const TextStyle(fontSize: 12),
-                            ),
-                            const Spacer(),
-                            IconButton(
-                              icon: const Icon(Icons.refresh),
-                              onPressed: _scanUsbDevices,
-                              iconSize: 20,
+                              device['gnssType'] as String,
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.blue,
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
                           ],
-                        ),
+                        ],
                       ),
-                      Expanded(
-                        child: ListView.builder(
-                          itemCount: _availableUsbDevices.length,
-                          itemBuilder: (context, index) {
-                            final device = _availableUsbDevices[index];
-                            final hasPermission =
-                                device['hasPermission'] as bool;
-                            final isRealHardware =
-                                device['isRealHardware'] as bool;
-
-                            return Card(
-                              margin: const EdgeInsets.symmetric(vertical: 4),
-                              color: hasPermission
-                                  ? Colors.green.shade50
-                                  : Colors.grey.shade50,
-                              child: ListTile(
-                                leading: Icon(
-                                  hasPermission
-                                      ? Icons.check_circle
-                                      : Icons.lock_outline,
-                                  color: hasPermission
-                                      ? Colors.green
-                                      : Colors.orange,
-                                ),
-                                title: Text(
-                                    device['productName'] ?? 'Unknown Device'),
-                                subtitle: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      'VID: ${device['vendorHex']} PID: ${device['productHex']}',
-                                      style: const TextStyle(fontSize: 11),
-                                    ),
-                                    if (device['gnssType'] != 'Unknown') ...[
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        device['gnssType'] as String,
-                                        style: TextStyle(
-                                          fontSize: 12,
-                                          color: Colors.blue,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                    ],
-                                  ],
-                                ),
-                                trailing: !isRealHardware
-                                    ? const Icon(Icons.warning,
-                                        color: Colors.red, size: 16)
-                                    : null,
-                                onTap: () => _connectToUsbDevice(device),
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
+                      trailing: !isRealHardware
+                          ? const Icon(Icons.warning,
+                          color: Colors.red, size: 16)
+                          : null,
+                      onTap: () => _connectToUsbDevice(device),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
       ),
       actions: [
         TextButton(
@@ -750,14 +788,33 @@ class _HomeScreenState extends State<HomeScreen>
       if (_latitude != null && _longitude != null) {
         _locationAcquired = true;
         _lastValidMapCenter = LatLng(_latitude!, _longitude!);
-
-        // Zoom to location if we have a fix and haven't zoomed yet
-        if (_hasFix && !_mapZoomed) {
-          _mapController.move(_lastValidMapCenter!, 18.0);
-          _mapZoomed = true;
-        }
       }
     });
+  }
+
+  void _zoomToCurrentLocation() {
+    if (_latitude != null && _longitude != null && _locationAcquired) {
+      _mapController.move(LatLng(_latitude!, _longitude!), 18.0);
+      setState(() {
+        _mapZoomed = true;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Zoomed to current location'),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No location data available'),
+          backgroundColor: Colors.red,
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
   }
 
   void _updateUsbStatus(GNSSProvider provider) {
@@ -770,44 +827,69 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Widget _buildMap() {
-    return FlutterMap(
-      mapController: _mapController,
-      options: MapOptions(
-        initialCenter: _getMapCenter(),
-        initialZoom: _locationAcquired ? 18.0 : 5.0,
-        maxZoom: 20.0,
-        minZoom: 3.0,
-        keepAlive: true,
-      ),
+    return Stack(
       children: [
-        // OpenStreetMap Standard Layer
-        if (_selectedLayers['OpenStreetMap Standard'] == true)
-          TileLayer(
-            urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-            userAgentPackageName: 'com.example.usb_connect_gnss',
-            subdomains: const ['a', 'b', 'c'],
+        FlutterMap(
+          mapController: _mapController,
+          options: MapOptions(
+            initialCenter: _getMapCenter(),
+            initialZoom: _locationAcquired ? 18.0 : 5.0,
+            maxZoom: 20.0,
+            minZoom: 3.0,
+            keepAlive: true,
+            onPositionChanged: (position, hasGesture) {
+              if (hasGesture) {
+                setState(() {
+                  _mapZoomed = true;
+                });
+              }
+            },
           ),
-
-        // ESRI Satellite Imagery Layer
-        if (_selectedLayers['ESRI Satellite View'] == true)
-          TileLayer(
-            urlTemplate:
-                'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-            userAgentPackageName: 'com.example.usb_connect_gnss',
-          ),
-
-        // Location marker
-        if (_latitude != null && _longitude != null && _locationAcquired)
-          MarkerLayer(
-            markers: [
-              Marker(
-                point: LatLng(_latitude!, _longitude!),
-                width: 80.0,
-                height: 80.0,
-                child: _buildLocationMarker(),
+          children: [
+            // OpenStreetMap Standard Layer
+            if (_selectedLayers['OpenStreetMap Standard'] == true)
+              TileLayer(
+                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                userAgentPackageName: 'com.example.usb_connect_gnss',
+                subdomains: const ['a', 'b', 'c'],
               ),
-            ],
+
+            // ESRI Satellite Imagery Layer
+            if (_selectedLayers['ESRI Satellite View'] == true)
+              TileLayer(
+                urlTemplate:
+                'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                userAgentPackageName: 'com.example.usb_connect_gnss',
+              ),
+
+            // Location marker
+            if (_latitude != null && _longitude != null && _locationAcquired)
+              MarkerLayer(
+                markers: [
+                  Marker(
+                    point: LatLng(_latitude!, _longitude!),
+                    width: 80.0,
+                    height: 80.0,
+                    child: _buildLocationMarker(),
+                  ),
+                ],
+              ),
+          ],
+        ),
+
+        // Current Location Button
+        Positioned(
+          bottom: 100,
+          right: 16,
+          child: FloatingActionButton(
+            onPressed: _zoomToCurrentLocation,
+            backgroundColor: Colors.white,
+            foregroundColor: Colors.blue,
+            elevation: 4,
+            child: const Icon(Icons.my_location),
+            tooltip: 'Go to current location',
           ),
+        ),
       ],
     );
   }
@@ -897,6 +979,23 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Widget _buildBandPanel() {
+    // Calculate actual band status based on detected systems and signal quality
+    final hasGPS = _availableSystems.any((s) => s.contains('GPS'));
+    final hasGalileo = _availableSystems.any((s) => s.contains('Galileo'));
+    final hasBeiDou = _availableSystems.any((s) => s.contains('BeiDou'));
+    final hasGLONASS = _availableSystems.any((s) => s.contains('GLONASS'));
+    final hasIRNSS = _availableSystems.any((s) =>
+    s.contains('IRNSS') || s.contains('NavIC'));
+
+    // Determine if bands are active based on actual data
+    final isL1Active = hasGPS || hasGalileo || hasBeiDou;
+    final isL2Active = _satellitesInUse != null && _satellitesInUse! > 8; // High satellite count suggests L2
+    final isL5Active = hasIRNSS && _satellitesInUse != null && _satellitesInUse! > 6;
+    final isSActive = hasIRNSS;
+    final isE1Active = hasGalileo;
+    final isB1Active = hasBeiDou;
+    final isG1Active = hasGLONASS;
+
     return Container(
       width: MediaQuery.of(context).size.width * 0.95,
       height: 500,
@@ -944,7 +1043,7 @@ class _HomeScreenState extends State<HomeScreen>
           ),
           const SizedBox(height: 12),
 
-          // Band Status - SHOWS REAL STATUS BASED ON DETECTED SYSTEMS
+          // Band Status - FIXED LOGIC
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
@@ -975,64 +1074,53 @@ class _HomeScreenState extends State<HomeScreen>
                   spacing: 8,
                   runSpacing: 8,
                   children: [
-                    // L1 Band - Usually always active if GPS is detected
+                    // L1 Band - Active if GPS/Galileo/BeiDou detected with good signal
                     _buildBandStatusChip(
                         "L1",
-                        _availableSystems.any((s) =>
-                            s.contains('GPS') ||
-                            s.contains('Galileo') ||
-                            s.contains('BeiDou')),
-                        _availableSystems.any((s) =>
-                            s.contains('GPS') ||
-                            s.contains('Galileo') ||
-                            s.contains('BeiDou')),
+                        true, // L1 is always supported
+                        isL1Active && _hasFix,
                         "1575.42 MHz"),
 
-                    // L2 Band - Active if device supports dual-frequency
+                    // L2 Band - Active if device supports and we have good satellite count
                     _buildBandStatusChip(
                         "L2",
-                        _availableSystems.length >
-                            1, // Only show active if multiple systems
-                        _availableSystems.length > 1,
+                        _usingUsbGnss, // L2 supported if using USB GNSS
+                        isL2Active,
                         "1227.60 MHz"),
 
-                    // L5 Band - Active if IRNSS/GPS L5 is detected
+                    // L5 Band - Active if IRNSS is detected with good signal
                     _buildBandStatusChip(
                         "L5",
-                        _availableSystems.any(
-                            (s) => s.contains('IRNSS') || s.contains('NavIC')),
-                        _availableSystems.any(
-                            (s) => s.contains('IRNSS') || s.contains('NavIC')),
+                        hasIRNSS || _usingUsbGnss, // Available if IRNSS capable or USB device
+                        isL5Active,
                         "1176.45 MHz"),
 
                     // S Band - ONLY active if IRNSS is actually detected
                     _buildBandStatusChip(
                         "S",
-                        _availableSystems.any(
-                            (s) => s.contains('IRNSS') || s.contains('NavIC')),
-                        _availableSystems.any(
-                            (s) => s.contains('IRNSS') || s.contains('NavIC')),
+                        hasIRNSS, // Only available if IRNSS
+                        isSActive,
                         "2492.028 MHz"),
 
                     // E1 Band - Only if Galileo detected
                     _buildBandStatusChip(
                         "E1",
-                        _availableSystems.any((s) => s.contains('Galileo')),
-                        _availableSystems.any((s) => s.contains('Galileo')),
+                        hasGalileo || _usingUsbGnss,
+                        isE1Active,
                         "1575.42 MHz"),
 
                     // B1 Band - Only if BeiDou detected
                     _buildBandStatusChip(
                         "B1",
-                        _availableSystems.any((s) => s.contains('BeiDou')),
-                        _availableSystems.any((s) => s.contains('BeiDou')),
+                        hasBeiDou || _usingUsbGnss,
+                        isB1Active,
                         "1561.098 MHz"),
 
                     // G1 Band - Only if GLONASS detected
                     _buildBandStatusChip(
                         "G1",
-                        _availableSystems.any((s) => s.contains('GLONASS')),
-                        _availableSystems.any((s) => s.contains('GLONASS')),
+                        hasGLONASS || _usingUsbGnss,
+                        isG1Active,
                         "1602 MHz"),
                   ],
                 ),
@@ -1135,7 +1223,7 @@ class _HomeScreenState extends State<HomeScreen>
                               style: TextStyle(
                                 fontSize: 10,
                                 color:
-                                    _getHealthColor(details?['health'] ?? ''),
+                                _getHealthColor(details?['health'] ?? ''),
                               ),
                             ),
                           ],
@@ -1259,8 +1347,8 @@ class _HomeScreenState extends State<HomeScreen>
             active
                 ? 'ACTIVE'
                 : supported
-                    ? 'AVAILABLE'
-                    : 'UNAVAILABLE',
+                ? 'AVAILABLE'
+                : 'UNAVAILABLE',
             style: TextStyle(
               fontSize: 9,
               fontWeight: FontWeight.bold,
@@ -1338,43 +1426,43 @@ class _HomeScreenState extends State<HomeScreen>
           const SizedBox(height: 12),
           ..._selectedLayers.keys
               .map((name) => Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(8),
-                        onTap: () => setState(() =>
-                            _selectedLayers[name] = !_selectedLayers[name]!),
-                        child: Padding(
-                          padding: const EdgeInsets.all(8),
-                          child: Row(
-                            children: [
-                              Checkbox(
-                                value: _selectedLayers[name],
-                                onChanged: (_) => setState(() =>
-                                    _selectedLayers[name] =
-                                        !_selectedLayers[name]!),
-                                activeColor: Colors.green,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(4),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  name,
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    color: Colors.grey.shade800,
-                                  ),
-                                ),
-                              ),
-                            ],
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(8),
+                onTap: () => setState(() =>
+                _selectedLayers[name] = !_selectedLayers[name]!),
+                child: Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: Row(
+                    children: [
+                      Checkbox(
+                        value: _selectedLayers[name],
+                        onChanged: (_) => setState(() =>
+                        _selectedLayers[name] =
+                        !_selectedLayers[name]!),
+                        activeColor: Colors.green,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          name,
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Colors.grey.shade800,
                           ),
                         ),
                       ),
-                    ),
-                  ))
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ))
               .toList(),
         ],
       ),
@@ -1432,6 +1520,14 @@ class _HomeScreenState extends State<HomeScreen>
       if (mounted) {
         _updateFromGNSSData(provider.data);
         _updateUsbStatus(provider);
+
+        // Auto-zoom to location if we have a fix and haven't zoomed yet
+        if (_hasFix && !_mapZoomed && _latitude != null && _longitude != null) {
+          _mapController.move(LatLng(_latitude!, _longitude!), 18.0);
+          setState(() {
+            _mapZoomed = true;
+          });
+        }
       }
     });
 
@@ -1584,12 +1680,12 @@ class _HomeScreenState extends State<HomeScreen>
         Expanded(
           child: _satellites.isNotEmpty
               ? ListView.builder(
-                  itemCount: _satellites.length,
-                  itemBuilder: (context, index) {
-                    final sat = _satellites[index];
-                    return _buildSatelliteListItem(sat);
-                  },
-                )
+            itemCount: _satellites.length,
+            itemBuilder: (context, index) {
+              final sat = _satellites[index];
+              return _buildSatelliteListItem(sat);
+            },
+          )
               : const Center(child: Text('No satellites detected')),
         ),
       ],
@@ -1739,7 +1835,7 @@ class _HomeScreenState extends State<HomeScreen>
                       final details = _systemDetails[system];
                       return Chip(
                         backgroundColor:
-                            _getSystemColor(system).withOpacity(0.1),
+                        _getSystemColor(system).withOpacity(0.1),
                         label: Text(
                           '$system (${details?['inUse'] ?? 0}/${details?['total'] ?? 0})',
                           style: TextStyle(color: _getSystemColor(system)),
@@ -2056,18 +2152,18 @@ class _HomeScreenState extends State<HomeScreen>
           Expanded(
             child: _satellites.isNotEmpty
                 ? ListView.builder(
-                    itemCount: _satellites.length,
-                    itemBuilder: (context, index) {
-                      final sat = _satellites[index];
-                      return _buildSatelliteListItem(sat);
-                    },
-                  )
+              itemCount: _satellites.length,
+              itemBuilder: (context, index) {
+                final sat = _satellites[index];
+                return _buildSatelliteListItem(sat);
+              },
+            )
                 : const Center(
-                    child: Text(
-                      "No satellites detected",
-                      style: TextStyle(color: Colors.grey),
-                    ),
-                  ),
+              child: Text(
+                "No satellites detected",
+                style: TextStyle(color: Colors.grey),
+              ),
+            ),
           ),
         ],
       ),
@@ -2146,8 +2242,8 @@ class SkyPlotPainter extends CustomPainter {
     final value = snr is int
         ? snr
         : snr is double
-            ? snr
-            : 0;
+        ? snr
+        : 0;
     if (value > 40) return Colors.green;
     if (value > 30) return Colors.lightGreen;
     if (value > 20) return Colors.yellow;
