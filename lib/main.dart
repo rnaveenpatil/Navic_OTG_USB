@@ -1,22 +1,31 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'screens/home_screen.dart';
+import 'providers/gnss_provider.dart';
 
 void main() {
-  runApp(const MyApp());
+  runApp(
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => GNSSProvider()),
+      ],
+      child: const GNSSMonitorApp(),
+    ),
+  );
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class GNSSMonitorApp extends StatelessWidget {
+  const GNSSMonitorApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'navic_usb',
+      title: 'USB GNSS Satellite Monitor',
       theme: ThemeData(
         primarySwatch: Colors.blue,
-        useMaterial3: true,
+        visualDensity: VisualDensity.adaptivePlatformDensity,
       ),
-      home: const HomeScreen(), // Redirect to HomeScreen
+      home: const HomeScreen(),
       debugShowCheckedModeBanner: false,
     );
   }

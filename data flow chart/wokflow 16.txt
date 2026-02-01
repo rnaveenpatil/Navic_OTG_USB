@@ -1,0 +1,13 @@
+RAW USB DATA
+      ↓
+  📦 Binary Stream
+      ↓
+  🔤 NMEA Sentences
+      ↓
+  🧩 Parsed Data
+      ↓
+  📊 Structured Information
+      ↓
+  🎨 Visual Representation
+      ↓
+  📱 User Interface

@@ -1,6 +1,6 @@
 {
-    "name": "navic_otg",
-    "short_name": "navic_otg",
+    "name": "usb_connect_gnss",
+    "short_name": "usb_connect_gnss",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- USB Accessory Filters -->
+    <usb-accessory manufacturer="U-blox" model="GNSS Receiver" />
+    <usb-accessory manufacturer="MediaTek" model="GNSS Module" />
+    <usb-accessory manufacturer="Quectel" model="GNSS Module" />
+    <usb-accessory manufacturer="Trimble" model="GNSS Receiver" />
+    <usb-accessory manufacturer="Garmin" model="GPS" />
+</resources>

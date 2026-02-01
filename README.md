@@ -1,4 +1,4 @@
-# navic_otg
+# usb_connect_gnss
 
 A new Flutter project.
 

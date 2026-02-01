@@ -1,0 +1,15 @@
+START → CONNECT → STREAM → VISUALIZE → MONITOR → RECOVER
+   ↓        ↓        ↓         ↓         ↓         ↓
+📱 App   🔌 USB   📡 NMEA   🗺️ Map    👁️ Watch  🔄 Auto-
+Launch  Connect   Data     View      Dog      Reconnect
+                  
+                  ┌─────────────────┐
+                  │    🛰️ Satellites  │
+                  │    📍 Position    │
+                  │    📊 Statistics  │
+                  └─────────────────┘
+                          ↓
+                  ┌─────────────────┐
+                  │   Real-time      │
+                  │   Updates        │
+                  └─────────────────┘

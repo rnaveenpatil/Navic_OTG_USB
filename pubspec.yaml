@@ -1,31 +1,38 @@
-name: navic_ss
-description: A NavIC Navigation App with USB GNSS Support
+name: usb_connect_gnss
+description: "USB GNSS Monitor Application"
 publish_to: 'none'
+
 version: 1.0.0+1
 
 environment:
-  sdk: ">=3.0.0 <4.0.0"
-  flutter: ">=3.7.0 <4.0.0"
+  sdk: '>=3.0.0 <4.0.0'
 
 dependencies:
   flutter:
     sdk: flutter
-
-  # CORE FUNCTIONALITY:
-  flutter_map: ^5.0.0      # For OSM maps
-  latlong2: ^0.9.0         # For coordinates
-  geolocator: ^11.0.0       # For location services
-  permission_handler: ^11.3.0  # For permissions
-
-  # ENHANCEMENTS:
-  flutter_svg: ^2.0.9      # For custom GNSS/satellite icons
-  provider: ^6.0.5         # For state management
+  
+  # USB Communication - this one exists for sure
+  usb_serial: ^0.5.2
+  
+  # State Management
+  provider: ^6.0.5
+  
+  # Permissions
+  permission_handler: ^11.3.1
+  
+  # Icons
+  cupertino_icons: ^1.0.8
+  nmea: ^3.3.3
+  fl_chart: ^1.1.1
+  flutter_map: ^8.2.2
+  latlong2: ^0.9.1
+  syncfusion_flutter_gauges: ^32.1.25
+  location: ^8.0.1
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  flutter_lints: ^2.0.0
 
 flutter:
   uses-material-design: true
-
-  # assets:
